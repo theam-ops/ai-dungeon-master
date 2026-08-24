@@ -1,5 +1,19 @@
 # AI Dungeon Master
 
+[![Python](https://img.shields.io/badge/Python-3.10+-3776AB?logo=python&logoColor=white)](https://www.python.org/)
+[![FastAPI](https://img.shields.io/badge/FastAPI-009688?logo=fastapi&logoColor=white)](https://fastapi.tiangolo.com/)
+[![SQLite](https://img.shields.io/badge/SQLite-003B57?logo=sqlite&logoColor=white)](https://sqlite.org/)
+[![No build step](https://img.shields.io/badge/frontend-no%20build%20step-c9a227)](static/)
+
+[![Claude](https://img.shields.io/badge/Claude-D97757?logo=anthropic&logoColor=white)](https://console.anthropic.com/)
+[![Gemini](https://img.shields.io/badge/Gemini-free%20tier-4285F4?logo=googlegemini&logoColor=white)](https://aistudio.google.com/apikey)
+[![Groq](https://img.shields.io/badge/Groq-free%20tier-F55036?logo=groq&logoColor=white)](https://console.groq.com/keys)
+[![Ollama](https://img.shields.io/badge/Ollama-runs%20offline-000000?logo=ollama&logoColor=white)](https://ollama.com/download)
+
+[![Languages](https://img.shields.io/badge/languages-English%20%7C%20%E0%B9%84%E0%B8%97%E0%B8%A2-8a7220)](#%E0%B8%A0%E0%B8%B2%E0%B8%A9%E0%B8%B2%E0%B9%84%E0%B8%97%E0%B8%A2--thai-support)
+[![Dice](https://img.shields.io/badge/dice-rolled%20in%20Python-7fb069)](game/rules.py)
+[![Play from](https://img.shields.io/badge/play%20from-browser%20%7C%20phone%20%7C%20terminal-6f9bb5)](#playing-from-your-phone)
+
 A D&D-style RPG where Claude Opus 5 runs the table. It narrates, voices every NPC,
 and adjudicates the rules. The parts a language model is bad at — dice, arithmetic,
 remembering your HP — run in Python instead.
