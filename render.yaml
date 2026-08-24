@@ -1,0 +1,19 @@
+services:
+  - type: web
+    name: ai-dungeon-master
+    runtime: docker
+    plan: free
+    healthCheckPath: /healthz
+    envVars:
+      - key: ANTHROPIC_API_KEY
+        sync: false          # set this in the Render dashboard
+      - key: APP_PASSWORD
+        sync: false          # set this too, or anyone can spend your credits
+      - key: SESSION_SECRET
+        generateValue: true
+      # The free plan has an ephemeral disk: campaign.db is wiped on redeploy.
+      # Use Export in the app to keep saves, or attach a persistent disk:
+      #   disk:
+      #     name: data
+      #     mountPath: /data
+      #   and set DND_DB=/data/campaign.db

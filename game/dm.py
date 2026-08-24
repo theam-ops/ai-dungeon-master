@@ -1,0 +1,315 @@
+"""The Dungeon Master: prompt, tools, and the async turn loop.
+
+The model narrates and judges. Every die and every point of damage goes through
+`rules.py` here in Python, so the DM cannot invent a roll or lose track of your HP.
+"""
+
+from . import i18n, providers, rules
+
+MAX_TOOL_ROUNDS = 12
+
+
+SYSTEM = """\
+You are the Dungeon Master for a tabletop roleplaying campaign in the style of \
+D&D 5th edition. Human players control the party; you control the world, every NPC, \
+and the rules.
+
+HOW YOU NARRATE
+- Second person, present tense: "You push the door open and the smell hits you first."
+- 120-250 words per turn. Vivid but tight. Cut throat-clearing; open on the image or the action.
+- Engage more than sight: sound, smell, temperature, the weight of things.
+- NPCs get distinct voices, wants, and secrets. They lie, bargain, and remember.
+- End most turns by handing control back - a question, a threat closing in, a choice with teeth.
+  Never present a numbered menu of options unless the player asks for one.
+
+HOW YOU RUN THE RULES
+- Call roll_dice for EVERY die. Never state a result you did not roll. Set the DC before rolling,
+  say it out loud, then roll and narrate the outcome honestly - including failure.
+- Typical DCs: 10 easy, 15 moderate, 20 hard, 25 very hard.
+- Ability checks: 1d20 + the relevant modifier from the state block. Attacks: 1d20 + modifier
+  (+2 proficiency at level 1-4). Then roll damage separately.
+- Call update_character for every HP, XP, gold, item, or condition change, naming the character
+  it applies to. The tool result is the truth; if it contradicts what you just narrated, correct
+  yourself in the next line.
+- Award 25-100 XP for meaningful encounters. 300 XP is level 2, 900 is level 3, 2700 is level 4.
+- Don't roll for trivial actions. Walking across a room is not a check.
+
+RUNNING THE PARTY
+- Each player message is labelled with the character who acted. Only that player's character did it.
+- Never narrate what another player's character says, thinks, feels, or decides. Ever.
+- Address characters by name. If someone has been quiet for a few turns, aim a hook at them -
+  an NPC turns to them, something moves on their side of the room.
+- With a party of one, ignore all of this and run a tight solo adventure.
+- In combat, keep the order moving in the fiction ("the ghoul is already on Vess") rather than
+  demanding a rigid initiative count.
+
+HOW YOU HANDLE PLAYERS
+- Say yes to creative ideas, or "yes, but" - reward invention with an easier DC, not a lecture.
+- If they attempt something impossible, tell them plainly in-world rather than silently failing them.
+- Let consequences land. A failed roll should change the situation, not just stall it.
+- If they go somewhere you haven't described, invent it confidently and stay consistent afterward.
+- Death is possible but earned. At 0 HP a character falls unconscious and rolls death saves.
+
+Keep continuity: names, injuries, debts, and promises persist. This is their story, not yours.
+"""
+
+
+TOOLS = [
+    {
+        "name": "roll_dice",
+        "description": (
+            "Roll real dice. You MUST use this for every check, attack, saving throw, "
+            "damage roll, and random determination. Never invent a die result yourself."
+        ),
+        "strict": True,
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "notation": {"type": "string",
+                             "description": "Dice notation, e.g. '1d20+5', '2d6', '8d6-2'."},
+                "reason": {"type": "string",
+                           "description": "What the roll is for, e.g. 'Vess: Stealth vs DC 14'."},
+                "mode": {"type": "string", "enum": ["normal", "advantage", "disadvantage"],
+                         "description": "Roll mode; advantage/disadvantage applies to a single die."},
+            },
+            "required": ["notation", "reason", "mode"],
+            "additionalProperties": False,
+        },
+    },
+    {
+        "name": "update_character",
+        "description": (
+            "Apply a mechanical change to one character's sheet. Call this whenever a "
+            "character takes damage, heals, gains XP or gold, picks up or loses items, "
+            "levels up, or gains/loses a condition. This is the only source of truth for state."
+        ),
+        "strict": True,
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "character_name": {"type": "string",
+                                   "description": "Exact name of the character this applies to."},
+                "hp_change": {"type": "integer",
+                              "description": "Negative for damage, positive for healing. 0 if none."},
+                "xp_gain": {"type": "integer", "description": "XP awarded. 0 if none."},
+                "gold_change": {"type": "integer", "description": "Gold gained or spent. 0 if none."},
+                "add_items": {"type": "array", "items": {"type": "string"},
+                              "description": "Items gained."},
+                "remove_items": {"type": "array", "items": {"type": "string"},
+                                 "description": "Items consumed or lost."},
+                "add_conditions": {"type": "array", "items": {"type": "string"},
+                                   "description": "e.g. 'poisoned', 'prone'."},
+                "remove_conditions": {"type": "array", "items": {"type": "string"},
+                                      "description": "Conditions that ended."},
+                "level_up": {"type": "boolean",
+                             "description": "True to advance one level (rolls new max HP)."},
+                "reason": {"type": "string", "description": "Short reason for the change."},
+            },
+            "required": ["character_name", "hp_change", "xp_gain", "gold_change", "add_items",
+                         "remove_items", "add_conditions", "remove_conditions", "level_up",
+                         "reason"],
+            "additionalProperties": False,
+        },
+    },
+]
+
+
+def _find(characters, name):
+    name = (name or "").strip().lower()
+    for ch in characters:
+        if ch["name"].lower() == name:
+            return ch
+    # tolerate the DM using a first name or a near-miss
+    for ch in characters:
+        if name and (name in ch["name"].lower() or ch["name"].lower().startswith(name)):
+            return ch
+    return None
+
+
+def run_tool(name, args, characters, lang="en"):
+    """Execute a DM tool call. Returns (tool_result_text, event_or_None)."""
+    if name == "roll_dice":
+        try:
+            total, detail, crit = rules.roll_notation(args.get("notation"),
+                                                      args.get("mode", "normal"))
+        except ValueError as e:
+            return f"ERROR: {e}", None
+        reason = args.get("reason", "roll")
+        return (f"{detail}  (total: {total})",
+                {"kind": "dice", "reason": reason, "detail": detail,
+                 "total": total, "crit": crit})
+
+    if name != "update_character":
+        return f"ERROR: unknown tool {name}", None
+
+    ch = _find(characters, args.get("character_name"))
+    if ch is None:
+        known = ", ".join(c["name"] for c in characters)
+        return f"ERROR: no character named {args.get('character_name')!r}. Party: {known}", None
+
+    log = []
+    # structured twin of `log`, so the browser can render this in the player's language
+    # instead of showing an English sentence built here
+    changes = []
+
+    hp_delta = int(args.get("hp_change") or 0)
+    if hp_delta:
+        before = ch["hp"]
+        ch["hp"] = max(0, min(ch["max_hp"], ch["hp"] + hp_delta))
+        log.append(f"HP {before} -> {ch['hp']}/{ch['max_hp']}")
+        changes.append({"t": "hp", "from": before, "to": ch["hp"], "max": ch["max_hp"],
+                        "delta": ch["hp"] - before})
+        if ch["hp"] == 0:
+            log.append("NOW AT 0 HP AND UNCONSCIOUS - start death saves")
+            changes.append({"t": "down"})
+
+    if args.get("xp_gain"):
+        ch["xp"] += int(args["xp_gain"])
+        log.append(f"XP {ch['xp']}")
+        changes.append({"t": "xp", "gain": int(args["xp_gain"]), "total": ch["xp"]})
+    if args.get("gold_change"):
+        delta = int(args["gold_change"])
+        ch["gold"] = max(0, ch["gold"] + delta)
+        log.append(f"GP {ch['gold']}")
+        changes.append({"t": "gold", "delta": delta, "total": ch["gold"]})
+
+    for item in args.get("add_items") or []:
+        ch["inventory"].append(item)
+        log.append(f"+ {item}")
+        changes.append({"t": "item+", "item": item})
+    for item in args.get("remove_items") or []:
+        match = next((i for i in ch["inventory"] if i.lower() == item.lower()), None)
+        if match:
+            ch["inventory"].remove(match)
+            log.append(f"- {match}")
+            changes.append({"t": "item-", "item": match})
+        else:
+            log.append(f"(not carried: {item})")
+
+    for cond in args.get("add_conditions") or []:
+        if cond not in ch["conditions"]:
+            ch["conditions"].append(cond)
+            log.append(f"condition: {cond}")
+            changes.append({"t": "cond+", "cond": cond})
+    for cond in args.get("remove_conditions") or []:
+        if cond in ch["conditions"]:
+            ch["conditions"].remove(cond)
+            log.append(f"cured: {cond}")
+            changes.append({"t": "cond-", "cond": cond})
+
+    if args.get("level_up"):
+        gain = rules.level_up(ch)
+        log.append(f"LEVEL {ch['level']}! max HP +{gain} -> {ch['max_hp']}, fully healed")
+        changes.append({"t": "level", "level": ch["level"], "gain": gain, "max": ch["max_hp"]})
+
+    summary = "; ".join(log) or "no change"
+    result = f"{summary}\nParty state: {rules.state_block(characters, lang)}"
+    return result, {"kind": "sheet", "character": ch["name"], "summary": summary,
+                    "changes": changes}
+
+
+def build_prompt(characters, actor, action, lang="en"):
+    """One player turn, labelled so the DM knows who acted."""
+    who = f"{actor} acts:" if actor else "The table says:"
+    return (f"<party_state>{rules.state_block(characters, lang)}</party_state>\n\n"
+            f"{who} {action}")
+
+
+def system_blocks(lang):
+    """Base prompt stays cached; the language instruction rides after it as its own
+    block, so switching language doesn't invalidate the cached prefix."""
+    blocks = [{"type": "text", "text": SYSTEM, "cache_control": {"type": "ephemeral"}}]
+    extra = i18n.NARRATION_INSTRUCTION.get(lang, "")
+    if extra.strip():
+        blocks.append({"type": "text", "text": extra})
+    return blocks
+
+
+async def _run(backend, history, characters, lang, images=None):
+    """Drive one backend through a turn's tool rounds. Raises to trigger failover."""
+    for round_no in range(MAX_TOOL_ROUNDS):
+        message = None
+        # images ride the first request only; after that the model has already seen them
+        # and re-sending would pay for them again on every tool round
+        turn_images = images if round_no == 0 else None
+        async for chunk in backend.stream(system_blocks(lang), history, TOOLS,
+                                          turn_images):
+            if chunk["type"] == "delta":
+                yield {"kind": "delta", "text": chunk["text"]}
+            else:
+                message = chunk
+
+        if message is None:
+            raise providers.ProviderFailed(f"{backend.label}: empty response")
+
+        if message["stop_reason"] == "refusal":
+            yield {"kind": "error",
+                   "text": "The DM declined to narrate that. Try steering the scene elsewhere."}
+            return
+
+        history.append({"role": "assistant", "content": message["content"]})
+
+        text = "".join(b.get("text", "") for b in message["content"]
+                       if b.get("type") == "text")
+        if text.strip():
+            yield {"kind": "narration", "text": text}
+
+        if message["stop_reason"] != "tool_use":
+            return
+
+        results = []
+        for block in message["content"]:
+            if block.get("type") == "tool_use":
+                out, event = run_tool(block["name"], dict(block.get("input") or {}),
+                                      characters, lang)
+                if event:
+                    yield event
+                results.append({"type": "tool_result", "tool_use_id": block["id"],
+                                "content": out})
+        history.append({"role": "user", "content": results})
+
+    yield {"kind": "error", "text": "The DM got stuck in a loop and the turn was cut short."}
+
+
+async def take_turn(history, characters, actor, action, lang="en", backend_id=None,
+                    images=None):
+    """Run one DM turn. Async generator of events; mutates history and characters.
+
+    Yields {"kind": "delta"|"narration"|"dice"|"sheet"|"switch"|"error", ...}.
+
+    If the chosen AI is out of credit or rate limited, the turn restarts on the next
+    configured one and emits a "switch" event naming who took over.
+    """
+    lang = i18n.normalise(lang)
+    history.append({"role": "user", "content": build_prompt(characters, actor, action, lang)})
+    mark = len(history)
+    images = images or []
+
+    order = providers.failover_order(backend_id)
+    if not order:
+        history.pop()
+        yield {"kind": "error", "text": "No AI is configured to run this game."}
+        return
+
+    last_error = None
+    for i, backend in enumerate(order):
+        if i:
+            # a previous backend gave up part-way; drop whatever it wrote and retry clean
+            del history[mark:]
+            yield {"kind": "switch", "backend": backend.id, "label": backend.label,
+                   "from": order[i - 1].label, "reason": str(last_error)}
+        try:
+            # a backend that can't see images still gets the caption in the prompt
+            usable = images if getattr(backend, "vision", False) else None
+            async for event in _run(backend, history, characters, lang, usable):
+                yield event
+            if i:
+                yield {"kind": "backend", "backend": backend.id}   # persist the switch
+            return
+        except (providers.ProviderExhausted, providers.ProviderFailed) as e:
+            last_error = e
+            continue
+
+    del history[mark:]
+    history.pop()
+    yield {"kind": "error", "text": f"Every AI turned the turn away ({last_error})."}

@@ -1,0 +1,420 @@
+# AI Dungeon Master
+
+A D&D-style RPG where Claude Opus 5 runs the table. It narrates, voices every NPC,
+and adjudicates the rules. The parts a language model is bad at — dice, arithmetic,
+remembering your HP — run in Python instead.
+
+Play in a browser on any device, solo or with friends in the same campaign, in
+**English or Thai (ภาษาไทย)**. If Claude's credit runs out mid-game, another AI picks
+the turn up automatically. There's a terminal client too (`dnd.py`), sharing the same
+DM and the same rules.
+
+---
+
+## Quick start (local)
+
+```bash
+pip install -r requirements.txt
+```
+
+Set your Anthropic API key (from console.anthropic.com):
+
+```bash
+setx ANTHROPIC_API_KEY "sk-ant-..."
+```
+
+Reopen the terminal after `setx` — or set it for this session only with
+`$env:ANTHROPIC_API_KEY = "sk-ant-..."` in PowerShell.
+
+Then:
+
+```bash
+python -m uvicorn server:app --reload
+```
+
+Open **http://localhost:8000**, roll a character, and play.
+
+## Playing from your phone
+
+**Option A — a tunnel (free, instant, no signup).** Your PC keeps running the server
+and gets a public https URL. Install [cloudflared](https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/downloads/),
+then with the server running:
+
+```bash
+cloudflared tunnel --url http://localhost:8000
+```
+
+It prints a `https://something.trycloudflare.com` URL. Open it on your phone. Set
+`APP_PASSWORD` first (see below) — that URL is on the public internet.
+
+**Option B — deploy it (works when your PC is off).** The repo has a `Dockerfile` and
+a `render.yaml`, so any container host works — Render, Railway, Fly.io, Koyeb. On
+Render: push this folder to GitHub, create a Blueprint from `render.yaml`, and set
+`ANTHROPIC_API_KEY` and `APP_PASSWORD` in the dashboard.
+
+> **Free tiers wipe the disk on redeploy.** `campaign.db` is not permanent there. Use
+> **Export** in the app to download a campaign as JSON and **Import** to restore it, or
+> attach a persistent disk and set `DND_DB=/data/campaign.db` (commented into `render.yaml`).
+
+## Playing free, with no API key
+
+Three ways. If you already pay for Claude, start with the third.
+
+> **You never need to touch a terminal for this.** Open the app with nothing configured
+> and it offers the links — **Get a free key from Google Gemini**, **from Groq**,
+> **install Ollama** — and a box to paste the key straight in. The server checks the key
+> against the provider before keeping it, tells you if it was rejected, and starts
+> working immediately. No `setx`, no restart.
+>
+> The same box sits under the AI button in the character sheet drawer, for adding
+> another provider later.
+
+### Google Gemini — a free key, no credit card
+
+1. Go to **aistudio.google.com/apikey** and sign in with a Google account.
+2. Click **Create API key**. That's it — no card, no billing setup. It starts with `AIza`.
+3. Set it and restart the server:
+
+Paste it into the app (easiest), or set it as an environment variable:
+
+```bash
+setx GEMINI_API_KEY "AIza-paste-yours-here"
+```
+
+**Gemini 2.0 Flash (free)** appears in the AI button tagged *free tier*, and becomes the
+default when no Claude key is set. The free tier has daily limits rather than a bill —
+plenty for normal play, and if you hit them the game fails over to whatever else you
+have configured.
+
+**Groq** works the same way and is very fast: a free key from **console.groq.com/keys**,
+no card, then `setx GROQ_API_KEY "gsk_..."`.
+
+Either of these is easier than everything below. If you just want to play tonight, get
+the Gemini key.
+
+### Ollama — free forever, offline, no account at all
+
+**Ollama** runs a model on your own PC — no key, no account, no tokens, nothing to run
+out of, and it works offline.
+
+1. Install it from **ollama.com/download** (normal Windows installer).
+2. Pull a model sized for your machine:
+
+```bash
+ollama pull llama3.2:3b
+```
+
+3. Restart the game server. **Llama 3.2 3B (local)** appears in the AI button, tagged
+   *on this PC*, and new campaigns use it automatically when no API key is set.
+
+`qwen2.5:3b` is the other default and often writes slightly better prose — pull both and
+switch between them with the AI button. Point at different models with `OLLAMA_MODELS`,
+and set `OLLAMA_HOST` if Ollama runs on another machine.
+
+**What to expect on a modest laptop** (8GB RAM, no dedicated GPU): a 3B model writes
+roughly 20–40 seconds per turn, and the DM is noticeably weaker than Claude — shorter
+descriptions, thinner NPCs, and a shakier memory of what happened several scenes ago.
+Bigger models are better but need more RAM: 7–8B wants 16GB to be comfortable.
+
+The important part holds either way: **dice and your character sheet still run in
+Python**, so a weaker model can't fake a roll or lose track of your HP. If a small model
+forgets to call the dice tool at all, you'll see it immediately — no dice chip appears
+and nothing on your sheet changes. It degrades into storytelling without mechanics
+rather than silently inventing results.
+
+> Models must support tool calling. `llama3.2` and `qwen2.5` do. Many small models don't
+> — check before swapping one in.
+
+### Already have Claude Pro? Play in Claude Code
+
+A Claude Pro or Max subscription covers claude.ai and **Claude Code** — it is not an API
+key, so it cannot power the game server (see the note at the end of this section). But
+Claude Code can *be* the DM directly, and that is ordinary interactive use of what you
+already pay for.
+
+Open a terminal in this folder and run `claude`, then:
+
+```bash
+/dm
+```
+
+That loads `.claude/commands/dm.md` and the session becomes your Dungeon Master. It
+rolls real dice and keeps your sheet by calling `play.py`, which wraps the same
+`game/rules.py` the web app uses — so the honesty guarantee is identical. You will see
+every roll:
+
+```
+Stealth vs DC 14: 1d20+3 -> [14] +3 = 17
+  -> SUCCESS against DC 14
+```
+
+Characters live in `saves/` and are shared with the terminal client. The DM records what
+happened with `play.py note`, and reads it back with `play.py recap` next session, so the
+campaign survives between sittings.
+
+You can drive the same tools yourself, without any AI, if you want to be your own DM:
+
+| Command | What it does |
+|---|---|
+| `python play.py new "Vess" Elf Rogue` | roll up a character (`--lang th` for Thai) |
+| `python play.py roll 1d20+3 --dc 14` | roll dice, and say whether it beat the DC |
+| `python play.py update Vess --hp -4 --xp 25` | apply damage, XP, gold, items, conditions |
+| `python play.py sheet Vess` | show the sheet |
+| `python play.py note Vess "..."` | record something that happened |
+| `python play.py recap Vess` | read the campaign log back |
+
+What you give up versus the web app: no browser UI, no phone (unless you use Claude Code
+on the web), no party — it is one player at a table with Claude. What you gain: it costs
+nothing beyond the subscription you already have, and Claude is a far better DM than any
+free-tier model.
+
+## When the tokens run out
+
+The character sheet drawer has a **Which AI runs the game** button. It lists every AI
+the server can reach; tap one to hand the table over. The switch is per campaign and
+takes effect on the next turn.
+
+You mostly won't need it. If the AI running a campaign returns "out of credit", "rate
+limited", or "bad key" mid-turn, the turn is retried on the next AI that's available —
+including a local Ollama model, which never runs out — and a line appears in the feed:
+
+> *Claude Opus 5 ran out — GPT-4o mini has taken over the table.*
+
+Nothing is lost. Whatever the failed AI managed to write is discarded before the retry,
+so you never get half a paragraph in one voice and half in another, and the campaign
+stays on whichever AI actually worked.
+
+Free keys count as backups too — a Gemini or Groq key costs nothing and gives the
+failover somewhere to land. For a wider set of paid models on one balance, get an
+[OpenRouter](https://openrouter.ai/keys) key:
+
+```bash
+setx OPENROUTER_API_KEY "sk-or-..."
+```
+
+Restart the server and GPT-4o mini, Gemini Flash, DeepSeek and Llama appear in the list.
+Choose different models with `OPENROUTER_MODELS`:
+
+```bash
+setx OPENROUTER_MODELS "openai/gpt-4o-mini,qwen/qwen-2.5-72b-instruct"
+```
+
+> **The model must support tool calling.** The DM rolls dice through a tool; a model
+> without tool support would have to invent its own results, which is the one thing this
+> whole design exists to prevent. The four defaults all support it — check OpenRouter's
+> model page before adding others.
+
+`DM_BACKEND` sets which AI new campaigns start on; `GEMINI_MODELS`, `GROQ_MODELS`,
+`OPENROUTER_MODELS` and `OLLAMA_MODELS` change which models each provider offers. In the
+terminal client, `/ai` lists them all and `/ai DeepSeek` switches.
+
+Claude is the better DM — it holds a scene together over a long campaign in a way the
+cheaper and local models don't. Treat the others as the thing that keeps the game moving
+at 1am when your balance hits zero, not as an equal swap.
+
+**A note on Claude Pro:** a Claude Pro or Max subscription covers claude.ai and Claude
+Code, not the API. There's no supported way to point this *server* at a Pro subscription,
+and anything claiming to do it works by impersonating a browser session — against
+Anthropic's terms and liable to break or get an account suspended. What the subscription
+does cover is playing through Claude Code with `/dm`, described above.
+
+## Where pasted keys live, and who may set them
+
+A key pasted into the app is written to `.keys.json` beside the database — plain text,
+same exposure as an environment variable, and git-ignored. A real environment variable
+always wins over a saved one, so `setx` still overrides.
+
+Setting a key is deliberately restricted, because it is the one thing here that spends
+money:
+
+- **`APP_PASSWORD` set** — anyone who has entered the password may set keys. That's how
+  you'd do it on a phone against a deployed instance.
+- **No password** — only requests coming from the machine the server runs on are
+  accepted. A public instance with no password refuses key changes outright, and says so.
+- **`ALLOW_KEY_SETUP=0`** — turns the feature off completely.
+
+Keys are never sent back to the browser; the app only ever learns *whether* a provider
+is configured. Deleting one removes it from both the file and the running process.
+
+## Lock it down
+
+The server holds your API key, so anyone who can open the URL can spend your credits.
+Set a password and the whole app sits behind it:
+
+```bash
+setx APP_PASSWORD "some-long-phrase"
+```
+
+Leave it unset for localhost-only use. `MAX_TURNS_PER_MIN` (default 12) caps how fast a
+single campaign can burn turns — worth keeping now that a campaign can fail over onto a
+second billing account.
+
+---
+
+## Solo or party — your choice
+
+Every campaign has a 6-character share code. A party of one is the normal case; nothing
+extra is needed for solo play.
+
+To bring someone in, tap **Share code** in the character sheet drawer and send them the
+link. They open it, pick a name, race and class, and they're in the same scene. Up to
+six characters per campaign.
+
+Turns are free-form, the way a real table works — anyone can act whenever, and the DM
+sees who did what. It won't make you wait for an initiative order.
+
+**Same character on two devices:** open the app on your phone, enter the campaign code,
+and pick your existing character from the list instead of making a new one. The
+character moves to that device.
+
+## ภาษาไทย — Thai support
+
+Tap **ไทย** in the language switcher (on the login screen, at the bottom of the lobby,
+or inside the character sheet drawer). Everything follows:
+
+- The DM narrates, voices NPCs, and writes its dice reasons in Thai.
+- The interface — buttons, labels, races, classes, ability names, the character sheet.
+- Starting gear is written onto the sheet in Thai (ดาบสั้น, เกราะหนัง, คบไฟ), so a Thai
+  campaign reads as Thai from the first turn.
+- Thai typography: the whole font stack swaps to Sarabun / Noto Sans Thai with more
+  line height, because tone marks and vowels stack above and below the baseline and
+  collide at Latin leading. Uppercase and letter-spacing are dropped — both are
+  Latin-only devices that mangle Thai.
+
+The language you pick when creating a campaign is the language its DM narrates in, and
+it sticks to that campaign. Your *interface* language is a separate, per-device
+preference — so a Thai player and an English player can sit at the same table, each
+reading the buttons in their own language while the DM narrates to both in Thai.
+
+Under the hood, races, classes and ability scores are stored in English and translated
+for display, which is what makes that work. Text people write — character names, items
+the DM invents, the story itself — is stored as typed, in whatever language it was
+written.
+
+Switching language mid-game re-renders the interface immediately. Narration already on
+screen keeps the language it was written in; it's a record of what happened.
+
+## Images
+
+Three ways to get a picture into a campaign, all from the character sheet drawer or the
+paperclip beside the message box:
+
+- **Upload** a file, or take a photo on your phone
+- **From a link** — paste an image address and the server fetches it
+- **Draw it** — have an AI generate a portrait, or illustrate the current scene
+
+**Portraits** appear on your sheet and as a small face beside your name in the party bar.
+**Attachments** go into the feed for everyone at the table, and the DM sees them too —
+"here's the map I found, what do I make of it?" — on any provider that supports vision
+(Claude, Gemini, Groq; a local Ollama model usually can't, and falls back to knowing an
+image was shown without seeing it).
+
+An attached image is sent on the turn it appears and then drops out of the history. Left
+in, it would be re-sent every single turn and quietly multiply the bill.
+
+> **Generated art needs billing.** Google's free tier covers text but not drawing — the
+> image models return HTTP 429 on a free key. The **Draw it** and **Illustrate this
+> scene** buttons say so plainly rather than failing silently. Everything else — upload,
+> links, portraits, vision — works on the free tier.
+
+### What happens to a file you upload
+
+Every image is decoded with Pillow rather than trusted by its extension, then re-encoded
+from raw pixels. That destroys **all EXIF, including GPS coordinates**, and anything
+hidden inside the container. SVG is refused outright — it is a script container, not an
+image. Files are stored content-addressed under `media/<campaign>/<sha256>.<ext>`, capped
+at 8MB in, 2048px (512px for portraits), 60 images per campaign.
+
+Pasting a link is the riskier door, so the server refuses any address that resolves to
+localhost, a private LAN range, or a cloud metadata endpoint — and re-checks every
+redirect hop, since a public URL can bounce to a private one.
+
+Images are served through `/api/campaigns/{id}/media/{id}` behind the same membership
+check as everything else, never from a static folder. **Anyone with the campaign code
+sees them** — worth remembering before uploading a photo of a real person.
+
+A campaign with images exports as a **`.zip`** (campaign.json plus the files) instead of
+plain JSON; import accepts both.
+
+## Commands and controls
+
+| Where | What |
+|---|---|
+| Message box | Type what your character does, in plain language |
+| English / ไทย | Switch the interface language, any time |
+| Which AI runs the game | Hand the table to a different AI |
+| 📎 (beside the message box) | Attach an image to your next action |
+| Portrait / Scene art | In the sheet drawer: upload, link, or generate |
+| ★ (top right) | Character sheet, private dice, share code, export |
+| ☰ (top left) | Back to the lobby |
+| Party bar | Everyone's HP, live — red border means down at 0 |
+| Enter | Sends on a keyboard; on a phone it's a newline, use the ➤ button |
+
+Private rolls in the drawer are yours alone — the DM never sees them.
+
+---
+
+## How it works
+
+The DM has exactly two tools, and both execute locally:
+
+- **`roll_dice`** — the model never states a result it didn't roll. It sets the DC out
+  loud first, then the number comes from Python's RNG, so it can't quietly decide you
+  succeeded. Every roll shows in the feed: `Vess: Stealth vs DC 14 · 1d20+3 → [7]+3 = 10`.
+- **`update_character`** — all damage, healing, XP, gold, items and conditions go through
+  the sheet in code, named to a specific character. The result is fed back to the model,
+  so it can't drift from your real HP. Level-ups roll a fresh hit die.
+
+Everything that happens is appended to an event log with a sequence number, and the
+browser tracks the last one it saw. When your phone sleeps, changes networks, or you
+close the tab, it reconnects and replays only what it missed — the scene is never lost.
+
+```
+game/rules.py    dice, ability scores, character generation   (no I/O)
+game/dm.py       system prompt, tools, the async turn loop
+game/store.py    SQLite: campaigns, characters, event log
+game/i18n.py     server-side strings: gear, DM language instruction, CLI
+game/media.py    image validation, EXIF stripping, URL guards, the file store
+game/providers.py  the AI backends, format translation, and failover
+server.py        FastAPI: auth, campaigns, SSE stream, actions
+static/i18n.js   interface strings for the browser
+static/          the rest of the UI — no build step
+dnd.py           terminal client, same DM
+```
+
+Sheet changes travel as structured data (`{"t": "hp", "from": 8, "to": 5}`) rather than
+a pre-written English sentence, so each browser renders them in its own language.
+
+## Tweaking it
+
+- **`SYSTEM` in `game/dm.py`** — the DM's voice, pacing, and house rules. Want grimdark
+  horror, or comedy, or much harsher DCs? This string is the whole personality.
+- **`CLASSES` / `RACES` in `game/rules.py`** — add your own, with hit dice and gear.
+- **Adding a language** — three places: `LANGUAGES`, `NARRATION_INSTRUCTION`, `GEAR`,
+  `NAMES` and `CLI` in `game/i18n.py`; a block in `STRINGS` in `static/i18n.js`; and a
+  `:root[data-lang="xx"]` font/leading block in `static/style.css` if the script needs
+  one. Nothing else knows about languages.
+- **`output_config={"effort": ...}` in `game/providers.py`** — `"low"` for faster,
+  cheaper Claude turns; `"high"` for a sharper DM.
+- **Adding an AI provider** — subclass `Backend` in `game/providers.py` with an
+  `available()` and a `stream()` that yields text deltas then one message in Anthropic
+  block format, and add it to `_build()`. Campaign history is stored in that one format,
+  so nothing else needs to know.
+
+## Cost
+
+Free options first: **Gemini** and **Groq** free tiers cost nothing (daily limits), and
+**Ollama** costs nothing at all, ever. Paid, roughly a cent or two per turn at Opus 5 pricing. The system prompt is cached, and the
+campaign history grows over a long session, so a multi-hour campaign runs to a few
+dollars. Switching the campaign to Claude Sonnet 5, or to one of the OpenRouter models,
+cuts that substantially — the AI button is as much a spending control as a fallback.
+
+## Terminal client
+
+```bash
+python dnd.py
+```
+
+Solo only, saved to `saves/<name>.json`, with `/sheet`, `/roll`, `/save`, `/recap` and
+`/quit`. It asks for a language first and then runs entirely in it — prompts, character
+sheet, help text and all. Same DM, same dice, same rules as the web app.

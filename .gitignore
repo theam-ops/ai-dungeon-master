@@ -1,0 +1,10 @@
+__pycache__/
+*.pyc
+campaign.db
+campaign.db-wal
+campaign.db-shm
+.session_secret
+saves/
+.venv/
+.keys.json
+media/

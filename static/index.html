@@ -1,0 +1,195 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#12100e">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<title>AI Dungeon Master</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Cinzel:wght@600;700&family=EB+Garamond:ital,wght@0,400;0,500;1,400&family=JetBrains+Mono:wght@400;600&family=Noto+Sans+Thai:wght@400;500;600;700&family=Sarabun:ital,wght@0,400;0,500;0,600;1,400&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="/style.css">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>&#127922;</text></svg>">
+</head>
+<body>
+
+<!-- ── login ─────────────────────────────────────────────────────────── -->
+<section id="screen-login" class="screen center hidden">
+  <div class="panel narrow">
+    <h1 class="title" data-i18n="app_title">AI Dungeon Master</h1>
+    <p class="sub" data-i18n="locked"></p>
+    <form id="login-form" autocomplete="on">
+      <input id="login-password" type="password" data-i18n-ph="password" autocomplete="current-password" required>
+      <button class="primary" type="submit" data-i18n="enter"></button>
+    </form>
+    <p class="err" id="login-err"></p>
+    <div class="langbar" id="lang-login"></div>
+  </div>
+</section>
+
+<!-- ── lobby ─────────────────────────────────────────────────────────── -->
+<section id="screen-lobby" class="screen center hidden">
+  <div class="panel">
+    <h1 class="title" data-i18n="app_title">AI Dungeon Master</h1>
+    <p class="sub" data-i18n="tagline"></p>
+
+    <div id="dm-warning" class="warning hidden">
+      <span data-i18n="no_key"></span>
+      <div class="getkeys hidden" id="get-key-links"></div>
+      <div class="keyform hidden" id="key-form"></div>
+    </div>
+
+    <div id="continue-block" class="hidden">
+      <h2 class="section-label" data-i18n="continue"></h2>
+      <div id="campaign-list" class="stack"></div>
+    </div>
+
+    <h2 class="section-label" data-i18n="start_new"></h2>
+    <div class="stack">
+      <button class="primary" id="btn-new" data-i18n="new_campaign"></button>
+      <div class="row">
+        <input id="join-code" data-i18n-ph="join_code" maxlength="6" autocapitalize="characters" spellcheck="false">
+        <button class="ghost" id="btn-join" data-i18n="join"></button>
+      </div>
+      <label class="filelabel" data-i18n="import">
+        <input type="file" id="import-file" accept="application/json,.json" hidden>
+      </label>
+    </div>
+    <p class="err" id="lobby-err"></p>
+
+    <h2 class="section-label" data-i18n="language"></h2>
+    <div class="langbar" id="lang-lobby"></div>
+  </div>
+</section>
+
+<!-- ── character creation ────────────────────────────────────────────── -->
+<section id="screen-create" class="screen center hidden">
+  <div class="panel">
+    <button class="back" id="create-back" data-i18n="back"></button>
+    <h1 class="title small" id="create-title"></h1>
+
+    <div id="campaign-name-block">
+      <label class="field-label" for="campaign-name" data-i18n="campaign_name"></label>
+      <input id="campaign-name" data-i18n-ph="campaign_ph" maxlength="60">
+      <p class="hint" id="dm-lang-note"></p>
+    </div>
+
+    <label class="field-label" for="char-name" data-i18n="character_name"></label>
+    <input id="char-name" data-i18n-ph="character_ph" maxlength="40" required>
+
+    <label class="field-label" data-i18n="race"></label>
+    <div class="chips" id="race-chips"></div>
+
+    <label class="field-label" data-i18n="klass"></label>
+    <div class="chips" id="class-chips"></div>
+
+    <div class="stats-block">
+      <div class="stats-head">
+        <span class="field-label flush" data-i18n="abilities"></span>
+        <button class="ghost tiny" id="btn-reroll" data-i18n="reroll"></button>
+      </div>
+      <div class="stats" id="stats"></div>
+      <p class="hint" id="gear-hint"></p>
+    </div>
+
+    <button class="primary" id="btn-create-go"></button>
+    <p class="err" id="create-err"></p>
+  </div>
+</section>
+
+<!-- ── join: pick or create ──────────────────────────────────────────── -->
+<section id="screen-pick" class="screen center hidden">
+  <div class="panel">
+    <button class="back" id="pick-back" data-i18n="back"></button>
+    <h1 class="title small" id="pick-title"></h1>
+    <p class="sub" id="pick-sub"></p>
+    <div id="pick-list" class="stack"></div>
+    <button class="primary" id="btn-pick-new" data-i18n="make_new"></button>
+    <p class="err" id="pick-err"></p>
+  </div>
+</section>
+
+<!-- ── game ──────────────────────────────────────────────────────────── -->
+<section id="screen-game" class="screen hidden">
+  <header class="topbar">
+    <button class="icon" id="btn-leave" data-i18n-title="back_lobby">&#9776;</button>
+    <div class="party" id="party-bar"></div>
+    <button class="icon" id="btn-sheet" data-i18n-title="char_sheet">&#9733;</button>
+  </header>
+
+  <main id="feed" class="feed"></main>
+
+  <div id="thinking" class="thinking hidden">
+    <span></span><span></span><span></span><em data-i18n="thinking"></em>
+  </div>
+
+  <div class="attachments hidden" id="attachments"></div>
+
+  <form class="composer" id="composer">
+    <button class="icon attach" id="btn-attach" type="button" data-i18n-title="attach">&#128206;</button>
+    <input type="file" id="attach-file" accept="image/png,image/jpeg,image/webp,image/gif" hidden multiple>
+    <textarea id="input" rows="1" data-i18n-ph="what_do" autocomplete="off"></textarea>
+    <button class="send" id="btn-send" type="submit" data-i18n-title="act">&#10148;</button>
+  </form>
+
+  <!-- character sheet drawer -->
+  <div class="scrim hidden" id="scrim"></div>
+  <aside class="drawer hidden" id="drawer">
+    <div class="drawer-handle"></div>
+    <div id="sheet-body"></div>
+    <div class="drawer-tools">
+      <div class="row">
+        <input id="private-roll" placeholder="1d20+3" spellcheck="false">
+        <button class="ghost" id="btn-private-roll" data-i18n="roll_privately"></button>
+      </div>
+      <p class="hint" id="private-result"></p>
+      <div class="row">
+        <button class="ghost" id="btn-share" data-i18n="share_code"></button>
+        <button class="ghost" id="btn-export" data-i18n="export"></button>
+      </div>
+
+      <h3 class="section-label" data-i18n="portrait"></h3>
+      <div class="portrait-row">
+        <div class="portrait-slot" id="portrait-slot"></div>
+        <div class="portrait-actions">
+          <button class="ghost tiny" id="btn-portrait-upload" data-i18n="upload"></button>
+          <button class="ghost tiny" id="btn-portrait-link" data-i18n="from_link"></button>
+          <button class="ghost tiny" id="btn-portrait-draw" data-i18n="draw_it"></button>
+          <button class="ghost tiny" id="btn-portrait-clear" data-i18n="remove"></button>
+        </div>
+      </div>
+      <input type="file" id="portrait-file" accept="image/png,image/jpeg,image/webp,image/gif" hidden>
+      <p class="hint" id="portrait-note"></p>
+
+      <h3 class="section-label" data-i18n="scene_art"></h3>
+      <button class="ghost" id="btn-illustrate" data-i18n="illustrate"></button>
+      <p class="hint" id="illustrate-note"></p>
+
+      <h3 class="section-label" data-i18n="which_ai"></h3>
+      <button class="ai-button" id="btn-ai">
+        <span class="ai-dot"></span>
+        <span id="ai-current"></span>
+        <span class="ai-caret">&#9662;</span>
+      </button>
+      <div class="ai-list hidden" id="ai-list"></div>
+      <div class="keyform hidden" id="key-form-game"></div>
+      <p class="hint" id="ai-note"></p>
+
+      <div class="langbar" id="lang-game"></div>
+    </div>
+  </aside>
+</section>
+
+<div class="lightbox hidden" id="lightbox">
+  <img id="lightbox-img" alt="">
+  <p class="lightbox-caption" id="lightbox-caption"></p>
+</div>
+
+<div id="toast" class="toast hidden"></div>
+
+<script src="/i18n.js"></script>
+<script src="/app.js"></script>
+</body>
+</html>

@@ -1,0 +1,9 @@
+saves/
+campaign.db*
+.session_secret
+__pycache__/
+*.pyc
+.venv/
+.keys.json
+saves/
+media/
