@@ -1,0 +1,22 @@
+# Line endings, decided here rather than by whatever core.autocrlf each clone happens
+# to have. Text is stored LF in the repository and checked out native.
+* text=auto
+
+# Windows batch files are the exception that matters: cmd.exe can misread a .bat or .cmd
+# saved with LF endings, so these are checked out CRLF whatever platform they land on.
+*.cmd   text eol=crlf
+*.bat   text eol=crlf
+*.ps1   text eol=crlf
+
+# ...and the mirror case, for anything that has to run through a POSIX shell.
+*.sh    text eol=lf
+
+# Never touched, never diffed as text.
+*.png   binary
+*.jpg   binary
+*.jpeg  binary
+*.webp  binary
+*.gif   binary
+*.ico   binary
+*.db    binary
+*.zip   binary

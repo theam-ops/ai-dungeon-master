@@ -4,6 +4,8 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <meta name="theme-color" content="#12100e">
+<link rel="icon" href="/favicon.ico" sizes="any">
+<link rel="apple-touch-icon" href="/favicon.png">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <title>AI Dungeon Master</title>
@@ -53,8 +55,15 @@
         <input id="join-code" data-i18n-ph="join_code" maxlength="6" autocapitalize="characters" spellcheck="false">
         <button class="ghost" id="btn-join" data-i18n="join"></button>
       </div>
-      <label class="filelabel" data-i18n="import">
-        <input type="file" id="import-file" accept="application/json,.json" hidden>
+      <!-- the label's text lives in its own span: data-i18n sets textContent, which
+           would otherwise delete the file input nested inside it -->
+      <label class="filelabel"><span data-i18n="import"></span>
+        <input type="file" id="import-file"
+               accept="application/json,.json,application/zip,.zip" hidden>
+      </label>
+      <!-- an export that has already been unzipped: pick the folder itself -->
+      <label class="filelabel"><span data-i18n="import_folder"></span>
+        <input type="file" id="import-dir" webkitdirectory directory hidden>
       </label>
     </div>
     <p class="err" id="lobby-err"></p>
@@ -125,11 +134,19 @@
     <span></span><span></span><span></span><em data-i18n="thinking"></em>
   </div>
 
+  <!-- live HUD: your vitals and the last rolls, always on while you play -->
+  <div id="hud" class="hud hidden">
+    <button class="hud-toggle" id="hud-toggle" type="button" data-i18n-title="hud_collapse">&#9662;</button>
+    <div class="hud-body" id="hud-body"></div>
+  </div>
+
   <div class="attachments hidden" id="attachments"></div>
 
   <form class="composer" id="composer">
     <button class="icon attach" id="btn-attach" type="button" data-i18n-title="attach">&#128206;</button>
     <input type="file" id="attach-file" accept="image/png,image/jpeg,image/webp,image/gif" hidden multiple>
+    <button class="icon attach" id="btn-attach-dir" type="button" data-i18n-title="attach_folder">&#128193;</button>
+    <input type="file" id="attach-dir" webkitdirectory directory hidden>
     <textarea id="input" rows="1" data-i18n-ph="what_do" autocomplete="off"></textarea>
     <button class="send" id="btn-send" type="submit" data-i18n-title="act">&#10148;</button>
   </form>
@@ -167,6 +184,12 @@
       <button class="ghost" id="btn-illustrate" data-i18n="illustrate"></button>
       <p class="hint" id="illustrate-note"></p>
 
+      <h3 class="section-label" data-i18n="library"></h3>
+      <button class="ghost" id="btn-library" data-i18n="library_import"></button>
+      <input type="file" id="library-dir" webkitdirectory directory hidden>
+      <p class="hint" id="library-note"></p>
+      <div id="lore-list" class="lore-list"></div>
+
       <h3 class="section-label" data-i18n="which_ai"></h3>
       <button class="ai-button" id="btn-ai">
         <span class="ai-dot"></span>
@@ -174,6 +197,21 @@
         <span class="ai-caret">&#9662;</span>
       </button>
       <div class="ai-list hidden" id="ai-list"></div>
+      <!-- sign Claude Code in without leaving the page; host machine only -->
+      <div class="claude-login hidden" id="claude-login">
+        <button class="ghost" id="btn-claude-login" data-i18n="claude_signin"></button>
+        <div class="hidden" id="claude-login-step">
+          <p class="hint" data-i18n="claude_signin_step"></p>
+          <a class="getkey" id="claude-login-url" target="_blank" rel="noopener noreferrer"
+             data-i18n="claude_signin_open"></a>
+          <div class="row">
+            <input id="claude-login-code" data-i18n-ph="claude_signin_code"
+                   autocomplete="off" spellcheck="false">
+            <button class="ghost" id="btn-claude-code" data-i18n="claude_signin_finish"></button>
+          </div>
+        </div>
+        <p class="hint" id="claude-login-note"></p>
+      </div>
       <div class="keyform hidden" id="key-form-game"></div>
       <p class="hint" id="ai-note"></p>
 

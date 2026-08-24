@@ -25,7 +25,30 @@ DM and the same rules.
 
 ---
 
-## Quick start (local)
+## Quick start — put it on your Desktop (Windows)
+
+Open the `tools` folder and double-click **Create shortcut.cmd**. That puts a d20 icon
+named *AI Dungeon Master* on your Desktop. Double-click it to play: it installs anything
+missing the first time, starts the server, and opens your browser. Close the window it
+leaves behind to stop the game.
+
+If the folder ever moves, run **Create shortcut.cmd** again — the shortcut remembers an
+absolute path.
+
+To skip the shortcut and just start it, double-click **Play.cmd** in this folder, or:
+
+```bash
+python launch.py
+```
+
+`launch.py` takes `--port 9000` if 8000 is taken (it will find a free port by itself
+anyway), and `--no-browser` if you'd rather open the tab yourself.
+
+You still need an AI to run the table — the game will say so and point you at the free
+options if none is set up. See **Playing free, with no API key** below, or use a Claude
+Pro subscription via Claude Code.
+
+## Quick start (any platform, by hand)
 
 ```bash
 pip install -r requirements.txt
@@ -139,12 +162,55 @@ rather than silently inventing results.
 > Models must support tool calling. `llama3.2` and `qwen2.5` do. Many small models don't
 > — check before swapping one in.
 
-### Already have Claude Pro? Play in Claude Code
+### Already have Claude Pro? Run the web app on your subscription
 
-A Claude Pro or Max subscription covers claude.ai and **Claude Code** — it is not an API
-key, so it cannot power the game server (see the note at the end of this section). But
-Claude Code can *be* the DM directly, and that is ordinary interactive use of what you
-already pay for.
+A Claude Pro or Max subscription covers claude.ai and **Claude Code**. It is not an API
+key, and there is no OAuth scope a web app can ask for to spend somebody's subscription —
+so the game cannot log players in with their Claude accounts. What it *can* do is drive
+the copy of Claude Code already installed on the machine running the server, which is
+ordinary use of what you already pay for.
+
+Install Claude Code, sign in, and add the Agent SDK:
+
+```bash
+pip install claude-agent-sdk
+```
+
+Restart the server. **Claude Pro/Max (this machine)** appears in the AI list in the
+character sheet drawer, and new campaigns start on it. The list checks whether Claude
+Code is actually signed in and marks the row **sign in needed** if it isn't — being
+installed and being signed in are different things, and the difference would otherwise
+only show up when a turn failed.
+
+If it isn't signed in, **Sign in with Claude** is right there in the same panel. It runs
+Claude Code's own `auth login` on this machine and shows you the link it prints, which is
+Anthropic's real authorisation page — the game never sees a password or a token. Usually
+the flow finishes by itself in the browser it opens and the row turns green; if Anthropic
+shows you a code instead, paste it into the box.
+
+That button only works **from the computer running the game**. A player who joined over a
+tunnel gets a 403 and never sees the link, because whoever completes that sign-in decides
+which Claude account pays for every turn at the table. No key, no credit — turns are
+billed to the subscription, and they count against its usage limits like any other
+Claude Code work. When the limit is reached the turn fails over to the next configured
+AI, the same as an API key running out.
+
+Everyone at the table plays on it: friends who join over a tunnel are served by the
+host's DM, exactly as they are for every other backend. The dice are unchanged — Claude
+Code reaches `roll_dice` and `update_character` through an in-process MCP server that
+calls the same `game/rules.py` every other backend uses.
+
+Two things to know. Claude Code cannot see images players attach, so a campaign on this
+backend gets the caption and not the picture. And each turn is sent with the story so
+far folded into the prompt rather than resuming a Claude Code session, which keeps one
+canonical campaign record — the one that gets exported, and the one another AI reads if
+it takes over mid-campaign.
+
+Configure it with `CLAUDE_CODE_MODEL` (default `claude-opus-5`), `CLAUDE_CODE_PATH` if
+`claude` is not on `PATH`, and `CLAUDE_CODE_TRANSCRIPT_TURNS` for how much history rides
+along (default 40).
+
+### Or play in the terminal, inside Claude Code itself
 
 Open a terminal in this folder and run `claude`, then:
 
@@ -178,9 +244,9 @@ You can drive the same tools yourself, without any AI, if you want to be your ow
 | `python play.py recap Vess` | read the campaign log back |
 
 What you give up versus the web app: no browser UI, no phone (unless you use Claude Code
-on the web), no party — it is one player at a table with Claude. What you gain: it costs
-nothing beyond the subscription you already have, and Claude is a far better DM than any
-free-tier model.
+on the web), no party — it is one player at a table with Claude. What you gain: nothing
+to install beyond Claude Code itself. If you want the browser, the phone and the party
+on the same subscription, use the backend above instead.
 
 ## When the tokens run out
 
@@ -348,7 +414,10 @@ check as everything else, never from a static folder. **Anyone with the campaign
 sees them** — worth remembering before uploading a photo of a real person.
 
 A campaign with images exports as a **`.zip`** (campaign.json plus the files) instead of
-plain JSON; import accepts both.
+plain JSON. Import takes either — and, via **…or an unzipped folder**, a folder you have
+already extracted: point it at the directory holding `campaign.json` and its `media/`
+folder. Whichever you pick, the contents decide how it's read, not the file name, so a
+renamed export still imports.
 
 ## Commands and controls
 
@@ -358,19 +427,52 @@ plain JSON; import accepts both.
 | English / ไทย | Switch the interface language, any time |
 | Which AI runs the game | Hand the table to a different AI |
 | 📎 (beside the message box) | Attach an image to your next action |
+| 📁 (beside 📎) | Attach a whole folder — it takes the images and ignores the rest |
+| Campaign library | In the sheet drawer: import a folder of your own art and notes |
 | Portrait / Scene art | In the sheet drawer: upload, link, or generate |
 | ★ (top right) | Character sheet, private dice, share code, export |
 | ☰ (top left) | Back to the lobby |
 | Party bar | Everyone's HP, live — red border means down at 0 |
+| HUD (above the message box) | Your HP, AC, conditions and the last four rolls — tap it for the full sheet |
+| ▾ (right of the HUD) | Collapse the HUD to just your name and HP; the choice sticks |
 | Enter | Sends on a keyboard; on a phone it's a newline, use the ➤ button |
 
 Private rolls in the drawer are yours alone — the DM never sees them.
 
 ---
 
+## Bringing a campaign you already run
+
+If you have been running a game by hand, the notes and art come with you. Open the
+character sheet drawer, find **Campaign library**, and point **Import a folder of your
+own material** at the folder you keep it in. It sorts the folder out itself:
+
+- **Images** (`.png`, `.jpg`, `.webp`, `.gif`) become campaign handouts, captioned from
+  their file names — `NPC_Aria_Venn.png` becomes *Aria Venn*. Up to 60 per campaign.
+- **Documents** (`.md`, `.txt`, `.html`) become notes the DM can search. Up to 40, and
+  4MB each.
+- Everything else is ignored, and the count of what was skipped is reported rather than
+  quietly dropped.
+
+The documents are *not* pasted into the prompt — a single character sheet can be 100KB,
+and a campaign's worth would crowd out the story. Instead the DM gets a third tool,
+`search_lore`, and the list of documents it can reach. When a player names someone it
+doesn't recognise, it looks them up and reads back the passage. You see it happen: the
+feed shows *checked the notes for "…"* the same way it shows a die roll.
+
+Matching is plain substring rather than word-based, deliberately — **Thai is written
+without spaces between words**, so anything splitting on whitespace would find nothing in
+a Thai document. Searching works the same in both languages the game speaks.
+
+A self-contained HTML page keeps its content inside a `<script>`, so that is read too;
+embedded base64 images are dropped first, since they are most of the bytes and none of
+the meaning. Documents travel with **Export** and **Import**, so a campaign moves whole.
+
+Remove a document any time from the same panel.
+
 ## How it works
 
-The DM has exactly two tools, and both execute locally:
+The DM has two tools that run on every campaign, and both execute locally:
 
 - **`roll_dice`** — the model never states a result it didn't roll. It sets the DC out
   loud first, then the number comes from Python's RNG, so it can't quietly decide you
@@ -378,6 +480,10 @@ The DM has exactly two tools, and both execute locally:
 - **`update_character`** — all damage, healing, XP, gold, items and conditions go through
   the sheet in code, named to a specific character. The result is fed back to the model,
   so it can't drift from your real HP. Level-ups roll a fresh hit die.
+
+A third, **`search_lore`**, appears only when a campaign has documents in its library —
+a tool with nothing behind it is worse than no tool, because the model reaches for it
+anyway. See **Bringing a campaign you already run** above.
 
 Everything that happens is appended to an event log with a sequence number, and the
 browser tracks the last one it saw. When your phone sleeps, changes networks, or you

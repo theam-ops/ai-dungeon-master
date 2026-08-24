@@ -787,6 +787,15 @@ load_saved_keys()
 BACKENDS = _build()
 BY_ID = {b.id: b for b in BACKENDS}
 
+# Claude Code, if this machine has it, runs the table on the host's Claude subscription
+# instead of API credit. Imported last because it imports this module back, and it
+# registers itself on import - whichever of the two modules is loaded first.
+try:
+    from . import claude_code as _claude_code             # noqa: F401
+except Exception as _e:                                  # never let it break the game
+    import sys
+    print(f"claude-code backend unavailable: {type(_e).__name__}: {_e}", file=sys.stderr)
+
 DEFAULT_ID = os.environ.get("DM_BACKEND") or "claude-opus-5"
 
 

@@ -229,7 +229,7 @@ button:disabled { opacity: .45; cursor: default; }
 .player-line.mine .who { color: var(--gold-dim); }
 
 .chip-line { margin: 0 0 14px; display: flex; flex-wrap: wrap; gap: 6px; }
-.dice-chip, .sheet-chip, .join-chip {
+.dice-chip, .sheet-chip, .join-chip, .lore-chip {
   display: inline-flex; align-items: center; gap: 7px;
   font-family: var(--mono); font-size: 12.5px; line-height: 1.5;
   padding: 6px 11px; border-radius: 8px;
@@ -264,6 +264,84 @@ button:disabled { opacity: .45; cursor: default; }
 .thinking span:nth-child(3) { animation-delay: .36s; margin-right: 6px; }
 @keyframes pulse { 0%,60%,100% { opacity: .25; } 30% { opacity: 1; } }
 
+/* ── live HUD ───────────────────────────────────────────────────────── */
+/* Pinned above the composer: your vitals and the last few rolls, so you never
+   have to open the drawer mid-scene. Collapses to a single line on request. */
+
+.hud {
+  flex: 0 0 auto; position: relative;
+  max-width: 720px; width: 100%; margin: 0 auto;
+  padding: 7px 40px 7px 14px;
+  background: rgba(26,23,20,.92); backdrop-filter: blur(12px);
+  border-top: 1px solid var(--edge);
+}
+.hud-body {
+  display: flex; align-items: center; gap: 10px;
+  overflow-x: auto; scrollbar-width: none;
+}
+.hud-body::-webkit-scrollbar { display: none; }
+
+.hud-toggle {
+  position: absolute; top: 50%; right: 6px; transform: translateY(-50%);
+  width: 28px; height: 28px; padding: 0; border: 0; background: none;
+  color: var(--muted); font-size: 13px; line-height: 1; cursor: pointer;
+}
+.hud.collapsed .hud-toggle { transform: translateY(-50%) rotate(180deg); }
+.hud.collapsed .hud-vitals .hud-ac,
+.hud.collapsed .hud-conds,
+.hud.collapsed .hud-rolls { display: none; }
+
+.hud-vitals {
+  flex: 0 0 auto; display: flex; align-items: center; gap: 10px;
+  cursor: pointer;
+}
+.hud-vitals .hud-who {
+  font-family: var(--display); font-weight: 600; font-size: 12px;
+  letter-spacing: .04em; color: var(--parchment);
+  max-width: 11ch; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.hud-hp { min-width: 92px; }
+.hud-hp .hud-track {
+  height: 5px; border-radius: 3px; background: #3a2a24; overflow: hidden;
+}
+.hud-hp .hud-fill { height: 100%; background: var(--green); transition: width .4s ease; }
+.hud-hp.low .hud-fill { background: var(--red); }
+.hud-hp .hud-num {
+  font-family: var(--mono); font-size: 11px; color: var(--muted); margin-top: 2px;
+}
+.hud-hp.down .hud-num { color: var(--red); }
+.hud-ac {
+  flex: 0 0 auto; font-family: var(--mono); font-size: 11px; color: var(--muted);
+  border: 1px solid var(--edge); border-radius: 6px; padding: 3px 7px;
+}
+.hud-ac b { color: var(--parchment); font-weight: 600; }
+
+.hud-conds { flex: 0 0 auto; display: flex; gap: 5px; }
+.hud-cond {
+  font-size: 11px; padding: 2px 7px; border-radius: 999px;
+  background: rgba(209,96,61,.16); border: 1px solid var(--red); color: #f0b8a4;
+  white-space: nowrap;
+}
+
+.hud-rolls {
+  flex: 1 1 auto; display: flex; gap: 5px; justify-content: flex-end;
+  min-width: 0; overflow: hidden;
+}
+.hud-roll {
+  flex: 0 0 auto; font-family: var(--mono); font-size: 11px;
+  padding: 2px 7px; border-radius: 6px;
+  border: 1px solid var(--edge); background: var(--ink-3); color: var(--muted);
+  white-space: nowrap;
+}
+.hud-roll b { color: var(--parchment); font-weight: 600; }
+.hud-roll.crit-success { border-color: var(--green); color: #d4f0c4; }
+.hud-roll.crit-fail { border-color: var(--red); color: #f0b8a4; }
+
+@media (max-width: 520px) {
+  .hud-rolls .hud-roll:nth-child(n+3) { display: none; }
+  .hud-vitals .hud-who { max-width: 7ch; }
+}
+
 /* composer */
 .composer {
   flex: 0 0 auto; display: flex; gap: 8px; align-items: flex-end;
@@ -282,6 +360,19 @@ button:disabled { opacity: .45; cursor: default; }
   background: linear-gradient(180deg, var(--gold), var(--gold-dim));
   color: #1a1408; font-size: 17px;
 }
+
+/* campaign library: the player's own documents, listed in the drawer */
+.lore-chip { border-color: var(--blue); color: #bcd7e6; font-style: italic; }
+.lore-list { display: flex; flex-direction: column; gap: 6px; margin-top: 8px; }
+.lore-row {
+  display: flex; align-items: center; justify-content: space-between; gap: 10px;
+  padding: 7px 10px; border: 1px solid var(--edge); border-radius: 8px;
+  background: var(--ink-3);
+}
+.lore-name {
+  font-size: 13px; word-break: break-all;
+}
+.lore-size { font-family: var(--mono); font-size: 11px; color: var(--muted); }
 
 /* ── drawer ─────────────────────────────────────────────────────────── */
 
@@ -446,6 +537,12 @@ button:disabled { opacity: .45; cursor: default; }
 .ai-tag.free {
   color: var(--green); border-color: rgba(127,176,105,.4);
 }
+.ai-tag.warn { color: #f0b8a4; border-color: rgba(209,96,61,.5); }
+
+.claude-login { margin-top: 8px; display: flex; flex-direction: column; gap: 8px; }
+.claude-login .row { display: flex; gap: 8px; }
+.claude-login .row input { flex: 1; min-width: 0; }
+
 
 /* ── links that fix a missing key ───────────────────────────────────── */
 

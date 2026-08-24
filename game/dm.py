@@ -4,7 +4,7 @@ The model narrates and judges. Every die and every point of damage goes through
 `rules.py` here in Python, so the DM cannot invent a roll or lose track of your HP.
 """
 
-from . import i18n, providers, rules
+from . import i18n, lore, providers, rules, store
 
 MAX_TOOL_ROUNDS = 12
 
@@ -113,6 +113,37 @@ TOOLS = [
     },
 ]
 
+# Only offered to the DM when the campaign has documents to search - a tool with nothing
+# behind it is worse than no tool, because the model will still reach for it.
+LORE_TOOL = {
+    "name": "search_lore",
+    "description": (
+        "Search the players' own campaign documents and read back the passages that "
+        "match. Use it before inventing anything their notes might already settle: a "
+        "name, a relationship, a place, what happened in an earlier session. Search for "
+        "a short distinctive phrase - a name as they write it - rather than a sentence."
+    ),
+    "strict": True,
+    "input_schema": {
+        "type": "object",
+        "properties": {
+            "query": {"type": "string",
+                      "description": "Short phrase to find, in the campaign's own language."},
+            "document": {"type": "string",
+                         "description": "Narrow to one document by name, or '' to search all."},
+        },
+        "required": ["query", "document"],
+        "additionalProperties": False,
+    },
+}
+
+
+def tools_for(cid):
+    """The tool list for this campaign: the base two, plus lore when there is any."""
+    if cid and store.lore_documents(cid):
+        return TOOLS + [LORE_TOOL]
+    return TOOLS
+
 
 def _find(characters, name):
     name = (name or "").strip().lower()
@@ -126,8 +157,15 @@ def _find(characters, name):
     return None
 
 
-def run_tool(name, args, characters, lang="en"):
+def run_tool(name, args, characters, lang="en", cid=None):
     """Execute a DM tool call. Returns (tool_result_text, event_or_None)."""
+    if name == "search_lore":
+        if not cid:
+            return "ERROR: this campaign has no documents to search.", None
+        found = lore.search(store.lore_texts(cid), args.get("query"),
+                            args.get("document") or None)
+        return found, {"kind": "lore", "query": (args.get("query") or "")[:80]}
+
     if name == "roll_dice":
         try:
             total, detail, crit = rules.roll_notation(args.get("notation"),
@@ -215,25 +253,41 @@ def build_prompt(characters, actor, action, lang="en"):
             f"{who} {action}")
 
 
-def system_blocks(lang):
+def system_blocks(lang, cid=None):
     """Base prompt stays cached; the language instruction rides after it as its own
-    block, so switching language doesn't invalidate the cached prefix."""
+    block, so switching language doesn't invalidate the cached prefix.
+
+    The document list rides last: it names what search_lore can reach, and it changes
+    when someone imports more, so it must not sit inside the cached prefix either.
+    """
     blocks = [{"type": "text", "text": SYSTEM, "cache_control": {"type": "ephemeral"}}]
     extra = i18n.NARRATION_INSTRUCTION.get(lang, "")
     if extra.strip():
         blocks.append({"type": "text", "text": extra})
+    if cid:
+        listing = lore.manifest(store.lore_documents(cid))
+        if listing:
+            blocks.append({"type": "text", "text": listing})
     return blocks
 
 
-async def _run(backend, history, characters, lang, images=None):
+async def _run(backend, history, characters, lang, images=None, cid=None):
     """Drive one backend through a turn's tool rounds. Raises to trigger failover."""
+    # a backend that owns its own tool loop (Claude Code, running on a subscription)
+    # runs the whole turn itself and yields the same events this loop would
+    if hasattr(backend, "run_turn"):
+        async for event in backend.run_turn(system_blocks(lang, cid), history, characters,
+                                            lang, images, cid):
+            yield event
+        return
+
     for round_no in range(MAX_TOOL_ROUNDS):
         message = None
         # images ride the first request only; after that the model has already seen them
         # and re-sending would pay for them again on every tool round
         turn_images = images if round_no == 0 else None
-        async for chunk in backend.stream(system_blocks(lang), history, TOOLS,
-                                          turn_images):
+        async for chunk in backend.stream(system_blocks(lang, cid), history,
+                                          tools_for(cid), turn_images):
             if chunk["type"] == "delta":
                 yield {"kind": "delta", "text": chunk["text"]}
             else:
@@ -261,7 +315,7 @@ async def _run(backend, history, characters, lang, images=None):
         for block in message["content"]:
             if block.get("type") == "tool_use":
                 out, event = run_tool(block["name"], dict(block.get("input") or {}),
-                                      characters, lang)
+                                      characters, lang, cid)
                 if event:
                     yield event
                 results.append({"type": "tool_result", "tool_use_id": block["id"],
@@ -272,7 +326,7 @@ async def _run(backend, history, characters, lang, images=None):
 
 
 async def take_turn(history, characters, actor, action, lang="en", backend_id=None,
-                    images=None):
+                    images=None, cid=None):
     """Run one DM turn. Async generator of events; mutates history and characters.
 
     Yields {"kind": "delta"|"narration"|"dice"|"sheet"|"switch"|"error", ...}.
@@ -301,7 +355,7 @@ async def take_turn(history, characters, actor, action, lang="en", backend_id=No
         try:
             # a backend that can't see images still gets the caption in the prompt
             usable = images if getattr(backend, "vision", False) else None
-            async for event in _run(backend, history, characters, lang, usable):
+            async for event in _run(backend, history, characters, lang, usable, cid):
                 yield event
             if i:
                 yield {"kind": "backend", "backend": backend.id}   # persist the switch

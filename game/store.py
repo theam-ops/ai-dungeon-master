@@ -61,6 +61,15 @@ CREATE TABLE IF NOT EXISTS media (
     created_at   REAL NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS lore (
+    id           TEXT PRIMARY KEY,
+    campaign_id  TEXT NOT NULL REFERENCES campaigns(id) ON DELETE CASCADE,
+    name         TEXT NOT NULL,
+    text         TEXT NOT NULL,
+    created_at   REAL NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_lore_campaign ON lore(campaign_id);
 CREATE INDEX IF NOT EXISTS idx_media_campaign ON media(campaign_id);
 CREATE INDEX IF NOT EXISTS idx_events_campaign ON events(campaign_id, seq);
 CREATE INDEX IF NOT EXISTS idx_characters_campaign ON characters(campaign_id);
@@ -198,6 +207,39 @@ def add_character(cid, char, token):
         (chid, cid, token, char["name"], json.dumps(char, ensure_ascii=False), now))
     conn.commit()
     return chid
+
+
+# --------------------------------------------------------------------------- #
+# lore - the player's own campaign documents, which the DM can look things up in
+# --------------------------------------------------------------------------- #
+
+def add_lore(cid, name, text):
+    """Store one document. Re-importing the same name replaces it rather than duplicating."""
+    conn = db()
+    conn.execute("DELETE FROM lore WHERE campaign_id=? AND name=?", (cid, name))
+    lid = _uid()
+    conn.execute("INSERT INTO lore (id, campaign_id, name, text, created_at)"
+                 " VALUES (?,?,?,?,?)", (lid, cid, name, text, time.time()))
+    conn.commit()
+    return {"id": lid, "name": name, "chars": len(text)}
+
+
+def lore_documents(cid):
+    """Names and sizes only - the text itself is far too big to hand around casually."""
+    return [{"id": r["id"], "name": r["name"], "chars": len(r["text"])}
+            for r in db().execute(
+                "SELECT id, name, text FROM lore WHERE campaign_id=? ORDER BY name", (cid,))]
+
+
+def lore_texts(cid):
+    return [(r["name"], r["text"]) for r in db().execute(
+        "SELECT name, text FROM lore WHERE campaign_id=? ORDER BY name", (cid,))]
+
+
+def delete_lore(cid, lid):
+    conn = db()
+    conn.execute("DELETE FROM lore WHERE campaign_id=? AND id=?", (cid, lid))
+    conn.commit()
 
 
 def party(cid):
@@ -351,6 +393,9 @@ def export_campaign(cid):
         "events": events_since(cid, 0, limit=100000),
         "media": [{k: v for k, v in m.items() if k not in ("campaign_id",)}
                   for m in campaign_media(cid)],
+        # the players' own documents travel with the campaign; they are the one part of
+        # it the app can't reconstruct from anything else
+        "lore": [{"name": n, "text": t} for n, t in lore_texts(cid)],
     }
 
 
@@ -398,6 +443,12 @@ def import_campaign(blob):
         conn.execute(
             "INSERT INTO events (campaign_id, kind, payload, created_at) VALUES (?,?,?,?)",
             (cid, ev.get("kind", "narration"), json.dumps(payload, ensure_ascii=False), now))
+
+    for doc in blob.get("lore", []):
+        name, text = doc.get("name"), doc.get("text")
+        if name and text:
+            conn.execute("INSERT INTO lore (id, campaign_id, name, text, created_at)"
+                         " VALUES (?,?,?,?,?)", (_uid(), cid, name, text, now))
 
     conn.commit()
     return {"id": cid, "code": code, "name": meta.get("name")}

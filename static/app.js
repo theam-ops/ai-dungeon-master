@@ -26,6 +26,8 @@ const S = {
   picked: { race: null, class: null, scores: null },
   attached: [],        // images staged for the next action
   lastScene: "",       // newest narration, for "illustrate this scene"
+  rolls: [],           // newest-last, for the HUD; only the last few are kept
+  hudOpen: localStorage.getItem("hud") !== "0",
 };
 
 const SCREENS = ["login", "lobby", "create", "pick", "game"];
@@ -434,9 +436,14 @@ $("btn-pick-new").onclick = () => openCreate({ newCampaign: false });
 $("import-file").onchange = async (e) => {
   const file = e.target.files[0];
   if (!file) return;
+  $("lobby-err").textContent = "";
   try {
-    const blob = JSON.parse(await file.text());
-    const c = await api("/api/import", { method: "POST", body: blob });
+    // a campaign with images exports as a zip (campaign.json plus the image files);
+    // one without exports as plain json. Either is a valid thing to hand back - and
+    // the contents decide, not the name, since a downloaded file often gets renamed.
+    const c = await isZip(file) ? await importArchive(file)
+                                : await api("/api/import", { method: "POST",
+                                              body: JSON.parse(await file.text()) });
     toast(t("imported"));
     await enterCampaign(c.id);
   } catch (err) {
@@ -444,6 +451,66 @@ $("import-file").onchange = async (e) => {
   }
   e.target.value = "";
 };
+
+/* An export that has been unzipped: the folder holds campaign.json and a media/ folder.
+   The browser hands over every file in it, so find the manifest, then send it back with
+   only the images it actually names. */
+$("import-dir").onchange = async (e) => {
+  const files = [...e.target.files];
+  e.target.value = "";
+  if (!files.length) return;
+  $("lobby-err").textContent = "";
+  try {
+    const manifest = findManifest(files);
+    if (!manifest) throw new Error(t("no_campaign_json"));
+    const blob = JSON.parse(await manifest.text());
+    const wanted = new Set((blob.media || []).map((m) => m.file));
+
+    const form = new FormData();
+    form.append("campaign", JSON.stringify(blob));
+    files.filter((f) => wanted.has(baseName(f)))
+         .forEach((f) => form.append("files", f, baseName(f)));
+
+    const c = await postForm("/api/import/folder", form);
+    toast(t("imported"));
+    await enterCampaign(c.id);
+  } catch (err) {
+    $("lobby-err").textContent = t("import_fail", err.message);
+  }
+};
+
+const baseName = (f) => (f.webkitRelativePath || f.name).split("/").pop();
+
+/* campaign.json if it's there; otherwise a lone .json, since people rename exports. */
+function findManifest(files) {
+  const exact = files.find((f) => baseName(f) === "campaign.json");
+  if (exact) return exact;
+  const jsons = files.filter((f) => /\.json$/i.test(baseName(f)));
+  return jsons.length === 1 ? jsons[0] : null;
+}
+
+/* "PK" - every zip starts with it, whatever the file ended up being called. */
+async function isZip(file) {
+  const head = new Uint8Array(await file.slice(0, 2).arrayBuffer());
+  return head[0] === 0x50 && head[1] === 0x4b;
+}
+
+/* Zipped exports go up as multipart - `api()` always sends JSON, so it can't carry one. */
+function importArchive(file) {
+  const form = new FormData();
+  form.append("file", file);
+  return postForm("/api/import/archive", form);
+}
+
+async function postForm(path, form) {
+  const res = await fetch(path, { method: "POST", body: form, credentials: "same-origin" });
+  if (!res.ok) {
+    let detail = res.statusText;
+    try { detail = (await res.json()).detail || detail; } catch (_) {}
+    throw new Error(detail);
+  }
+  return res.json();
+}
 
 $("btn-export").onclick = () => {
   window.location = `/api/campaigns/${S.campaign.id}/export`;
@@ -459,6 +526,90 @@ $("btn-share").onclick = async () => {
   try { await navigator.clipboard.writeText(url); toast(t("copied")); }
   catch (_) { toast(t("code_is", S.campaign.code)); }
 };
+
+/* ── campaign library: the player's own art and notes ───────────────── */
+
+const LORE_EXTENSIONS = [".md", ".markdown", ".txt", ".html", ".htm"];
+// 51MB of portraits in one request is a bad idea on any connection - send it in pieces,
+// which also gives us something honest to show a progress line from
+const BATCH_BYTES = 12 * 1024 * 1024;
+
+$("btn-library").onclick = () => $("library-dir").click();
+
+$("library-dir").onchange = async (e) => {
+  const picked = [...e.target.files];
+  e.target.value = "";
+  const usable = picked.filter(isLibraryFile);
+  if (!usable.length) return void ($("library-note").textContent = t("library_nothing"));
+
+  // anything filtered out here never leaves the browser, but it still gets counted -
+  // picking a folder and being told "added 2" with no word about the other 30 is a lie
+  const totals = { images: 0, documents: 0, skipped: picked.length - usable.length };
+  let done = 0;
+  try {
+    for (const batch of batches(usable)) {
+      $("library-note").textContent = t("library_working", done, usable.length);
+      const form = new FormData();
+      batch.forEach((f) => form.append("files", f, baseName(f)));
+      const r = await postForm(`/api/campaigns/${S.campaign.id}/library`, form);
+      totals.images += r.images.length;
+      totals.documents += r.documents.length;
+      totals.skipped += r.skipped.length;
+      done += batch.length;
+    }
+  } catch (err) {
+    $("library-note").textContent = t("image_failed", err.message);
+    return;
+  }
+
+  const summary = t("library_done", totals.images, totals.documents);
+  $("library-note").textContent =
+    totals.skipped ? `${summary} ${t("library_skipped", totals.skipped)}` : summary;
+  renderLore();
+};
+
+function isLibraryFile(f) {
+  const name = baseName(f).toLowerCase();
+  return (f.type || "").startsWith("image/")
+      || LORE_EXTENSIONS.some((ext) => name.endsWith(ext));
+}
+
+/* Group files so no single request is enormous; an oversized file still gets its own
+   batch rather than being dropped here — the server decides whether it's too big. */
+function* batches(files) {
+  let batch = [], size = 0;
+  for (const f of files) {
+    if (batch.length && size + f.size > BATCH_BYTES) {
+      yield batch;
+      batch = []; size = 0;
+    }
+    batch.push(f);
+    size += f.size;
+  }
+  if (batch.length) yield batch;
+}
+
+async function renderLore() {
+  const box = $("lore-list");
+  box.innerHTML = "";
+  let docs;
+  try {
+    docs = (await api(`/api/campaigns/${S.campaign.id}/lore`)).documents;
+  } catch (_) { return; }
+  docs.forEach((d) => {
+    const row = el("div", "lore-row");
+    const left = el("div");
+    left.append(el("div", "lore-name", d.name));
+    left.append(el("div", "lore-size", t("lore_chars", d.chars.toLocaleString())));
+    const drop = el("button", "ghost tiny", t("lore_remove"));
+    drop.onclick = async () => {
+      await api(`/api/campaigns/${S.campaign.id}/lore/${d.id}`, { method: "DELETE" });
+      renderLore();
+    };
+    row.append(left, drop);
+    box.append(row);
+  });
+}
 
 /* ── which AI runs the game ─────────────────────────────────────────── */
 
@@ -498,6 +649,9 @@ async function renderAI() {
       row.append(left);
       if (p.free) row.append(el("span", "ai-tag free",
                                 p.kind === "ollama" ? t("ai_local") : t("ai_free")));
+      // Claude Code being installed doesn't mean it's signed in, and the difference only
+      // shows up when a turn fails. Ask it, and say so here instead.
+      if (p.kind === "claude-code") checkSignIn(row, p);
       row.onclick = () => chooseAI(p);
       list.append(row);
       return;
@@ -508,8 +662,11 @@ async function renderAI() {
     const row = el("div", "ai-row off");
     row.append(left);
     if (p.key_url) {
+      // Ollama and Claude Code are installed, not keyed - don't send people
+      // looking for a key page that doesn't exist
+      const installed = p.kind === "ollama" || p.kind === "claude-code";
       const get = el("a", "ai-get" + (p.free ? " free" : ""),
-                     p.kind === "ollama" ? t("ai_install") : t("ai_get_key"));
+                     installed ? t("ai_install") : t("ai_get_key"));
       get.href = p.key_url;
       get.target = "_blank";
       get.rel = "noopener noreferrer";
@@ -521,6 +678,78 @@ async function renderAI() {
     list.append(row);
   });
 }
+
+async function checkSignIn(row, p) {
+  const tag = el("span", "ai-tag", t("ai_checking"));
+  row.append(tag);
+  let state;
+  try {
+    state = await api("/api/claude/status");
+  } catch (_) {
+    tag.remove();               // couldn't ask; don't claim either way
+    return;
+  }
+  tag.className = "ai-tag " + (state.logged_in ? "free" : "warn");
+  tag.textContent = state.logged_in ? t("ai_signed_in") : t("ai_sign_in");
+
+  // the sign-in runs on the machine hosting the game, so only that machine is offered it
+  const box = $("claude-login");
+  box.classList.toggle("hidden", state.logged_in);
+  if (state.logged_in) return;
+  $("btn-claude-login").classList.toggle("hidden", !state.can_sign_in);
+  $("claude-login-note").textContent = state.can_sign_in ? "" : t("claude_signin_remote");
+}
+
+$("btn-claude-login").onclick = async () => {
+  const note = $("claude-login-note");
+  note.textContent = t("claude_signin_busy");
+  try {
+    const { url } = await api("/api/claude/login", { method: "POST" });
+    const link = $("claude-login-url");
+    link.href = url;
+    $("claude-login-step").classList.remove("hidden");
+    note.textContent = "";
+    window.open(url, "_blank", "noopener");
+    $("claude-login-code").focus();
+    // Claude Code opens a browser too, and if you are already signed in to claude.ai the
+    // flow finishes on its own without a code ever being shown. Watch for that rather
+    // than leaving someone staring at a box they don't need to fill in.
+    watchSignIn();
+  } catch (err) {
+    note.textContent = err.message;
+  }
+};
+
+async function watchSignIn(tries = 45) {
+  for (let i = 0; i < tries; i++) {
+    await new Promise((r) => setTimeout(r, 2000));
+    if ($("claude-login-step").classList.contains("hidden")) return;   // done by hand
+    let state;
+    try { state = await api("/api/claude/status"); } catch (_) { return; }
+    if (state.logged_in) {
+      $("claude-login-step").classList.add("hidden");
+      $("claude-login-note").textContent = t("claude_signin_ok");
+      await renderAI();
+      return;
+    }
+  }
+}
+
+$("btn-claude-code").onclick = async () => {
+  const code = $("claude-login-code").value.trim();
+  if (!code) return;
+  const note = $("claude-login-note");
+  note.textContent = t("claude_signin_busy");
+  try {
+    await api("/api/claude/login/code", { method: "POST", body: { code } });
+    $("claude-login-code").value = "";
+    $("claude-login-step").classList.add("hidden");
+    note.textContent = t("claude_signin_ok");
+    await renderAI();           // the row should go green now
+  } catch (err) {
+    note.textContent = err.message;
+  }
+};
 
 async function chooseAI(p) {
   $("ai-list").classList.add("hidden");
@@ -580,10 +809,14 @@ function openLightbox(src, caption) {
 $("lightbox").onclick = () => $("lightbox").classList.add("hidden");
 
 /* staging images alongside the next action */
-$("btn-attach").onclick = () => $("attach-file").click();
+const MAX_ATTACH = 4;
+const IMAGE_TYPES = ["image/png", "image/jpeg", "image/webp", "image/gif"];
 
-$("attach-file").onchange = async (e) => {
-  for (const file of [...e.target.files].slice(0, 4)) {
+$("btn-attach").onclick = () => $("attach-file").click();
+$("btn-attach-dir").onclick = () => $("attach-dir").click();
+
+async function attachFiles(files) {
+  for (const file of files.slice(0, MAX_ATTACH)) {
     try {
       // share:false — the player's own action puts it in the feed, not the upload
       const m = await uploadImage(file, "handout", { share: false });
@@ -592,8 +825,22 @@ $("attach-file").onchange = async (e) => {
       toast(t("image_failed", err.message));
     }
   }
-  e.target.value = "";
   renderAttachments();
+}
+
+$("attach-file").onchange = async (e) => {
+  await attachFiles([...e.target.files]);
+  e.target.value = "";
+};
+
+/* A folder holds whatever it holds — filter to images, and say so when there were more
+   than one turn can carry rather than silently dropping them. */
+$("attach-dir").onchange = async (e) => {
+  const images = [...e.target.files].filter((f) => IMAGE_TYPES.includes(f.type));
+  e.target.value = "";
+  if (!images.length) return toast(t("no_images_here"));
+  if (images.length > MAX_ATTACH) toast(t("used_first_n", MAX_ATTACH, images.length));
+  await attachFiles(images);
 };
 
 function renderAttachments() {
@@ -705,6 +952,7 @@ async function refreshParty() {
   const info = await api(`/api/campaigns/${S.campaign.id}`);
   S.party = info.party;
   renderParty();
+  renderHud();
   renderSheet();
   renderPortrait();
 }
@@ -721,11 +969,13 @@ async function enterCampaign(id) {
   S.live = null;
   S.attached = [];
   S.lastScene = "";
+  S.rolls = [];        // rolls belong to the campaign you are in, not the browser
   renderAttachments();
   localStorage.setItem("campaign_id", id);
 
   $("feed").innerHTML = "";
   renderParty();
+  renderHud();
   show("game");
   connect();
 }
@@ -822,6 +1072,9 @@ function handle(ev) {
       if (ev.crit === "success") chip.append(el("span", "", "NAT 20"));
       if (ev.crit === "fail") chip.append(el("span", "", "NAT 1"));
       appendChip(chip);
+      S.rolls.push({ reason: ev.reason, total: ev.total, crit: ev.crit });
+      if (S.rolls.length > HUD_ROLLS) S.rolls.shift();
+      renderHud();
       break;
     }
 
@@ -834,6 +1087,11 @@ function handle(ev) {
       appendChip(el("div", "sheet-chip", `${ev.character}: ${body}`));
       break;
     }
+
+    case "lore":
+      // the DM consulted the players' own notes - worth showing, the same way a roll is
+      appendChip(el("div", "lore-chip", t("looked_up", ev.query)));
+      break;
 
     case "join":
       appendChip(el("div", "join-chip", ev.text || t("joins", ev.character)));
@@ -895,6 +1153,7 @@ function handle(ev) {
     case "party":
       S.party = ev.party;
       renderParty();
+      renderHud();
       if (!$("drawer").classList.contains("hidden")) renderPortrait();
       if (!$("drawer").classList.contains("hidden")) renderSheet();
       break;
@@ -986,6 +1245,61 @@ function renderParty() {
   });
 }
 
+const HUD_ROLLS = 4;
+
+/* The HUD is the character sheet's headline, kept on screen: whoever you are
+   playing, their HP and AC, anything wrong with them, and the last few rolls.
+   Everything it needs already arrives on the party and dice events. */
+function renderHud() {
+  const hud = $("hud");
+  const c = S.party.find((p) => p.name === (S.campaign && S.campaign.you));
+  if (!c) { hud.classList.add("hidden"); return; }
+
+  hud.classList.remove("hidden");
+  hud.classList.toggle("collapsed", !S.hudOpen);
+  $("hud-toggle").title = t(S.hudOpen ? "hud_collapse" : "hud_expand");
+
+  const body = $("hud-body");
+  body.innerHTML = "";
+
+  // tapping the vitals opens the full sheet — the HUD is a summary, not a replacement
+  const vitals = el("div", "hud-vitals");
+  vitals.title = t("char_sheet");
+  vitals.onclick = () => openDrawer(true);
+  vitals.append(el("div", "hud-who", c.name));
+
+  const frac = c.max_hp ? c.hp / c.max_hp : 0;
+  const hp = el("div", "hud-hp" + (frac < 0.34 ? " low" : "") + (c.hp === 0 ? " down" : ""));
+  const track = el("div", "hud-track");
+  const fill = el("div", "hud-fill");
+  fill.style.width = Math.max(0, Math.min(100, Math.round(frac * 100))) + "%";
+  track.append(fill);
+  hp.append(track, el("div", "hud-num", `${t("hp")} ${c.hp}/${c.max_hp}`));
+  vitals.append(hp);
+
+  const ac = el("div", "hud-ac");
+  ac.append(document.createTextNode(t("ac") + " "), el("b", "", String(c.ac)));
+  vitals.append(ac);
+  body.append(vitals);
+
+  if (c.conditions && c.conditions.length) {
+    const conds = el("div", "hud-conds");
+    c.conditions.forEach((x) => conds.append(el("span", "hud-cond", x)));
+    body.append(conds);
+  }
+
+  const rolls = el("div", "hud-rolls");
+  // newest first, so the roll that just landed is the one nearest the composer
+  S.rolls.slice().reverse().forEach((r) => {
+    const pill = el("div", "hud-roll" + (r.crit ? " crit-" + r.crit : ""));
+    pill.title = r.reason || "";
+    pill.append(document.createTextNode((r.reason || t("roll")) + " "),
+                el("b", "", String(r.total)));
+    rolls.append(pill);
+  });
+  body.append(rolls);
+}
+
 function renderSheet() {
   const c = S.party.find((p) => p.name === S.campaign.you);
   const body = $("sheet-body");
@@ -1040,10 +1354,16 @@ function renderSheet() {
 function openDrawer(open) {
   $("drawer").classList.toggle("hidden", !open);
   $("scrim").classList.toggle("hidden", !open);
-  if (open) { renderSheet(); renderAI(); renderPortrait(); }
+  if (open) { renderSheet(); renderAI(); renderPortrait(); renderLore();
+              $("library-note").textContent = t("library_hint"); }
   else $("ai-list").classList.add("hidden");
 }
 $("btn-sheet").onclick = () => openDrawer(true);
+$("hud-toggle").onclick = () => {
+  S.hudOpen = !S.hudOpen;
+  localStorage.setItem("hud", S.hudOpen ? "1" : "0");
+  renderHud();
+};
 $("scrim").onclick = () => openDrawer(false);
 
 $("btn-private-roll").onclick = async () => {

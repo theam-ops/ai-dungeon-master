@@ -24,6 +24,7 @@ import asyncio
 import io
 import json
 import os
+import re
 import secrets
 import zipfile
 from collections import defaultdict
@@ -35,7 +36,7 @@ from fastapi.responses import (FileResponse, JSONResponse, Response,
 from fastapi.staticfiles import StaticFiles
 from starlette.middleware.sessions import SessionMiddleware
 
-from game import dm, i18n, media, providers, rules, store
+from game import claude_code, dm, i18n, lore, media, providers, rules, store
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 STATIC = os.path.join(HERE, "static")
@@ -71,6 +72,23 @@ app = FastAPI(title="AI Dungeon Master")
 app.add_middleware(SessionMiddleware, secret_key=_session_secret(),
                    session_cookie="dnd_session", max_age=60 * 60 * 24 * 365,
                    same_site="lax", https_only=False)
+
+# The interface has no build step and no hashed file names, so /app.js always means the
+# newest /app.js. Without an explicit header a browser is free to guess how long it may
+# keep the old one, which shows up as an interface that quietly stays a version behind.
+# "no-cache" doesn't mean don't store it - it means ask first, and the ETag turns that
+# into a 304 with no body.
+SHELL_FILES = (".html", ".js", ".css", ".json", ".ico")
+
+
+@app.middleware("http")
+async def revalidate_shell(request, call_next):
+    response = await call_next(request)
+    path = request.url.path
+    if path == "/" or path.endswith(SHELL_FILES):
+        response.headers.setdefault("Cache-Control", "no-cache")
+    return response
+
 
 # in-memory fanout: campaign_id -> set of subscriber queues
 subscribers = defaultdict(set)
@@ -263,6 +281,63 @@ async def verify_provider(request: Request, backend_id: str):
     except Exception as e:
         ok, why = False, type(e).__name__
     return {"ok": ok, "message": why}
+
+
+# --------------------------------------------------------------------------- #
+# signing Claude Code in, from the web page
+#
+# This drives `claude auth login` on the machine running the server, so it is strictly
+# for whoever is sitting at that machine. A player who joined over a tunnel must not be
+# able to start it or see the link: the sign-in decides which account pays for every
+# turn at this table, and the link would let them attach their own.
+# --------------------------------------------------------------------------- #
+
+LOOPBACK = ("127.0.0.1", "::1", "localhost")
+
+
+def require_host(request):
+    if (request.client.host if request.client else "") not in LOOPBACK:
+        raise HTTPException(403, "signing in can only be done from the computer running "
+                                 "the game")
+
+
+@app.get("/api/claude/status")
+async def claude_status(request: Request):
+    require_auth(request)
+    state = claude_code.auth_status()
+    host = (request.client.host if request.client else "") in LOOPBACK
+    return {**state, "can_sign_in": host and state["installed"]}
+
+
+@app.post("/api/claude/login")
+async def claude_login(request: Request):
+    """Start the sign-in and hand back Anthropic's own authorisation link."""
+    require_auth(request)
+    require_host(request)
+    try:
+        url = await claude_code.LOGIN.start()
+    except Exception as e:
+        raise HTTPException(400, str(e) or type(e).__name__)
+    return {"url": url}
+
+
+@app.post("/api/claude/login/code")
+async def claude_login_code(request: Request, code: str = Body(..., embed=True)):
+    """Pass the code Anthropic showed the player back to the waiting process."""
+    require_auth(request)
+    require_host(request)
+    ok, why = await claude_code.LOGIN.submit(code)
+    if not ok:
+        raise HTTPException(400, why)
+    return {"ok": True, **claude_code.auth_status()}
+
+
+@app.post("/api/claude/login/cancel")
+async def claude_login_cancel(request: Request):
+    require_auth(request)
+    require_host(request)
+    await claude_code.LOGIN.cancel()
+    return {"ok": True}
 
 
 @app.post("/api/campaigns/{cid}/provider")
@@ -460,7 +535,7 @@ async def run_dm_turn(cid, actor, action, images=None):
             async for event in dm.take_turn(history, characters, actor, action,
                                             store.campaign_lang(cid),
                                             store.campaign_backend(cid) or providers.default_id(),
-                                            images):
+                                            images, cid):
                 kind = event.pop("kind")
                 if kind == "delta":
                     await broadcast(cid, {"kind": "delta", **event})
@@ -586,6 +661,82 @@ async def upload_media(request: Request, cid: str,
     m = _store_image(cid, token, processed, kind, caption, "upload")
     await _announce_image(cid, m, me, kind, share)
     return _describe(m)
+
+
+LORE_EXTENSIONS = (".md", ".markdown", ".txt", ".html", ".htm")
+MAX_LORE_BYTES = int(os.environ.get("LORE_MAX_BYTES", 4 * 1024 * 1024))
+MAX_LORE_DOCS = int(os.environ.get("LORE_MAX_DOCS", 40))
+
+
+@app.post("/api/campaigns/{cid}/library")
+async def import_library(request: Request, cid: str,
+                         files: list[UploadFile] = File(default=[])):
+    """Bring a folder of the players' own campaign material into this campaign.
+
+    Images become handouts captioned from their file names; text documents become lore
+    the DM can search. Everything else is ignored, so pointing this at a working folder
+    full of odds and ends does the sensible thing rather than failing.
+    """
+    token, campaign, me = require_member(request, cid)
+    images, documents, skipped = [], [], []
+
+    for f in files:
+        name = os.path.basename(f.filename or "")
+        if not name:
+            continue
+        lower = name.lower()
+        if lower.endswith(LORE_EXTENSIONS):
+            raw = await f.read(MAX_LORE_BYTES + 1)
+            if len(raw) > MAX_LORE_BYTES:
+                skipped.append({"name": name, "why": "document too large"})
+                continue
+            documents.append((name, raw))
+        elif (f.content_type or "").startswith("image/"):
+            images.append((name, await f.read(media.MAX_UPLOAD_BYTES + 1)))
+        else:
+            skipped.append({"name": name, "why": "not an image or a document"})
+
+    added_images = []
+    for name, raw in images:
+        try:
+            processed = media.process(raw, "handout")
+        except media.MediaError as e:
+            skipped.append({"name": name, "why": str(e)})
+            continue
+        m = _store_image(cid, token, processed, "handout", _caption_from(name), "upload")
+        added_images.append(_describe(m))
+
+    added_docs = []
+    for name, raw in documents[:MAX_LORE_DOCS]:
+        text = lore.to_text(name, raw.decode("utf-8", errors="replace"))
+        if not text.strip():
+            skipped.append({"name": name, "why": "no readable text in it"})
+            continue
+        added_docs.append(store.add_lore(cid, name, text))
+    for name, _ in documents[MAX_LORE_DOCS:]:
+        skipped.append({"name": name, "why": f"over the {MAX_LORE_DOCS}-document limit"})
+
+    return {"images": added_images, "documents": added_docs, "skipped": skipped}
+
+
+def _caption_from(filename):
+    """'NPC_Aria_Venn.png' -> 'Aria Venn'. The file name is the only label there is."""
+    stem = os.path.splitext(os.path.basename(filename))[0]
+    stem = re.sub(r"^(NPC|PC|Scene|Place|Map|Img|Image)[_\-\s]+", "", stem, flags=re.I)
+    return re.sub(r"[_\-]+", " ", stem).strip()[:200]
+
+
+@app.get("/api/campaigns/{cid}/lore")
+async def list_lore(request: Request, cid: str):
+    require_member(request, cid)
+    return {"documents": store.lore_documents(cid)}
+
+
+@app.delete("/api/campaigns/{cid}/lore/{lid}")
+async def remove_lore(request: Request, cid: str, lid: str):
+    require_member(request, cid)
+    store.delete_lore(cid, lid)
+    return {"ok": True}
 
 
 @app.post("/api/campaigns/{cid}/media/url")
@@ -724,22 +875,33 @@ async def export_campaign(request: Request, cid: str):
                     headers={"Content-Disposition": disposition})
 
 
-def _restore_media_files(cid, blob, zf=None):
-    """Put the image files back on disk under the new campaign id."""
+def _restore_media_files(cid, blob, read_file):
+    """Put the image files back on disk under the new campaign id.
+
+    `read_file(name)` returns that image's bytes, or None if the export didn't carry it -
+    a zip reads from the archive, a folder upload from what the browser sent. Names come
+    out of the export, so they are checked before being joined to a path.
+    """
     for m in blob.get("media") or []:
         name = m.get("file") or ""
         if not name or "/" in name or os.sep in name or ".." in name:
             continue
-        if zf is None:
-            continue
-        try:
-            data = zf.read(f"media/{name}")
-        except KeyError:
+        data = read_file(name)
+        if data is None:
             continue
         folder = media.campaign_dir(cid)
         os.makedirs(folder, exist_ok=True)
         with open(os.path.join(folder, name), "wb") as f:
             f.write(data)
+
+
+def _zip_reader(zf):
+    def read(name):
+        try:
+            return zf.read(f"media/{name}")
+        except KeyError:
+            return None
+    return read
 
 
 @app.post("/api/import/archive")
@@ -758,11 +920,44 @@ async def import_archive(request: Request, file: UploadFile = File(...)):
     except (ValueError, KeyError, TypeError) as e:
         raise HTTPException(400, f"that archive isn't a campaign export: {e}")
 
-    _restore_media_files(campaign["id"], blob, zf)
+    _restore_media_files(campaign["id"], blob, _zip_reader(zf))
     roster = store.party(campaign["id"])
     if roster and not store.character_for_token(campaign["id"], token):
         store.claim_character(roster[0]["_id"], token)
     return campaign
+
+
+@app.post("/api/import/folder")
+async def import_folder(request: Request, campaign: str = Form(...),
+                        files: list[UploadFile] = File(default=[])):
+    """Import an unzipped export - the campaign.json text plus its image files.
+
+    The browser can hand over a whole directory, but not a zip of one, so the client
+    reads campaign.json itself and posts the images alongside. Image names in an export
+    are content hashes, so matching on the base name is enough to pair them up.
+    """
+    token = require_auth(request)
+    try:
+        blob = json.loads(campaign)
+    except ValueError as e:
+        raise HTTPException(400, f"that folder's campaign.json is not readable: {e}")
+    if not isinstance(blob, dict):
+        raise HTTPException(400, "that folder's campaign.json is not a campaign export")
+
+    try:
+        record = store.import_campaign(blob)
+    except (ValueError, KeyError, TypeError) as e:
+        raise HTTPException(400, f"that folder isn't a campaign export: {e}")
+
+    images = {}
+    for f in files:
+        images[os.path.basename(f.filename or "")] = await f.read(30 * 1024 * 1024)
+    _restore_media_files(record["id"], blob, images.get)
+
+    roster = store.party(record["id"])
+    if roster and not store.character_for_token(record["id"], token):
+        store.claim_character(roster[0]["_id"], token)
+    return record
 
 
 @app.post("/api/import")
