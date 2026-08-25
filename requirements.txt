@@ -1,4 +1,6 @@
 anthropic>=1.0.0
+# imported directly by game/providers.py and game/media.py, not only via anthropic
+httpx>=0.27
 fastapi>=0.115
 uvicorn[standard]>=0.30
 itsdangerous>=2.0
