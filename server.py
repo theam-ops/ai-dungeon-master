@@ -371,6 +371,16 @@ async def private_roll(request: Request, notation: str = Body("1d20", embed=True
 # campaigns
 # --------------------------------------------------------------------------- #
 
+def public_character(c):
+    """One character as the whole table may see it.
+
+    A player's standing notes are theirs: they steer the DM on that player's own turns
+    and nobody else needs them to draw an HP bar, so they never ride a payload that goes
+    to every browser at the table.
+    """
+    return {k: v for k, v in c.items() if not k.startswith("_") and k != "notes"}
+
+
 def _make_character(spec, lang="en"):
     try:
         return rules.new_character(
@@ -430,8 +440,7 @@ async def add_or_claim(request: Request, cid: str, body: dict = Body(...)):
         if not target:
             raise HTTPException(404, "no such character")
         store.claim_character(claim_id, token)
-        return {"ok": True, "character": {k: v for k, v in target.items()
-                                          if not k.startswith("_")}}
+        return {"ok": True, "character": public_character(target)}
 
     if len(store.party(cid)) >= 6:
         raise HTTPException(400, "this party is full (6 characters)")
@@ -450,11 +459,24 @@ async def campaign_detail(request: Request, cid: str):
         "lang": campaign["lang"] or "en",
         "backend": campaign["backend"] or providers.default_id(),
         "you": me["name"],
-        "party": [{k: v for k, v in c.items() if not k.startswith("_")}
-                  for c in store.party(cid)],
+        "notes": me.get("notes", ""),        # your own standing notes, nobody else's
+        "notes_max": store.MAX_NOTES_CHARS,
+        "party": [public_character(c) for c in store.party(cid)],
         "last_seq": store.last_seq(cid),
         "started": bool(store.get_history(cid)),
     }
+
+
+@app.post("/api/campaigns/{cid}/notes")
+async def set_notes(request: Request, cid: str, body: dict = Body(...)):
+    """Standing details for your own character - tone, backstory, what to leave alone.
+
+    There is no character id in the request on purpose: `require_member` resolves the
+    character from this browser's own token, so a player can only ever write their own.
+    """
+    token, campaign, me = require_member(request, cid)
+    notes = store.set_character_notes(me["_id"], body.get("notes"))
+    return {"ok": True, "notes": notes, "notes_max": store.MAX_NOTES_CHARS}
 
 
 @app.get("/api/campaigns/{cid}/events")
@@ -507,8 +529,7 @@ async def stream(request: Request, cid: str, since: int = 0):
 
 
 def party_payload(cid):
-    return {"kind": "party", "party": [{k: v for k, v in c.items() if not k.startswith("_")}
-                                       for c in store.party(cid)]}
+    return {"kind": "party", "party": [public_character(c) for c in store.party(cid)]}
 
 
 def load_images(cid, media_ids):

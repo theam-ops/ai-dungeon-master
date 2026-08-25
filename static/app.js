@@ -24,6 +24,8 @@ const S = {
   canSetKeys: false,   // may this browser paste a key straight into the server?
   backend: null,       // the one running this campaign
   picked: { race: null, class: null, scores: null },
+  notes: "",           // your own standing notes for the DM
+  notesMax: 600,       // replaced by the server's real cap when a campaign is entered
   attached: [],        // images staged for the next action
   lastScene: "",       // newest narration, for "illustrate this scene"
   rolls: [],           // newest-last, for the HUD; only the last few are kept
@@ -100,7 +102,10 @@ async function refreshUI() {
   if (S.pending) renderPick(S.pending);
   if (S.campaign) {
     renderParty();
-    if (!$("drawer").classList.contains("hidden")) { renderSheet(); renderAI(); }
+    // the count only — re-filling the box would throw away notes being typed right now
+    if (!$("drawer").classList.contains("hidden")) {
+      renderSheet(); renderAI(); renderNotesCount();
+    }
   }
   if (!$("screen-lobby").classList.contains("hidden")) {
     try { renderLobby((await api("/api/me")).campaigns); } catch (_) {}
@@ -611,6 +616,41 @@ async function renderLore() {
   });
 }
 
+/* ── notes for the DM: this player's own standing details ───────────── */
+
+/* The cap belongs to the server — it trims on save whatever the browser let you type —
+   so the box is told that number rather than carrying a second one of its own. */
+function fillNotes() {
+  const box = $("notes");
+  box.maxLength = S.notesMax;
+  box.value = S.notes;
+  renderNotesCount();
+}
+
+function renderNotesCount() {
+  $("notes-count").textContent = t("notes_count", $("notes").value.length, S.notesMax);
+}
+
+$("notes").addEventListener("input", renderNotesCount);
+
+$("btn-notes-save").onclick = async () => {
+  const btn = $("btn-notes-save");
+  btn.disabled = true;
+  try {
+    const r = await api(`/api/campaigns/${S.campaign.id}/notes`, {
+      method: "POST", body: { notes: $("notes").value },
+    });
+    S.notes = r.notes;
+    $("notes").value = r.notes;      // show what was actually kept, trimming included
+    renderNotesCount();
+    toast(t("notes_saved"));
+  } catch (e) {
+    toast(e.message);
+  } finally {
+    btn.disabled = false;
+  }
+};
+
 /* ── which AI runs the game ─────────────────────────────────────────── */
 
 async function loadProviders() {
@@ -964,6 +1004,8 @@ async function enterCampaign(id) {
   S.campaign = info;
   S.party = info.party;
   S.backend = info.backend;
+  S.notes = info.notes || "";
+  S.notesMax = info.notes_max || S.notesMax;
   S.lastSeq = 0;
   S.seen.clear();
   S.live = null;
@@ -1354,7 +1396,7 @@ function renderSheet() {
 function openDrawer(open) {
   $("drawer").classList.toggle("hidden", !open);
   $("scrim").classList.toggle("hidden", !open);
-  if (open) { renderSheet(); renderAI(); renderPortrait(); renderLore();
+  if (open) { renderSheet(); renderAI(); renderPortrait(); renderLore(); fillNotes();
               $("library-note").textContent = t("library_hint"); }
   else $("ai-list").classList.add("hidden");
 }

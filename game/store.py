@@ -17,6 +17,11 @@ DB_PATH = os.environ.get("DND_DB", os.path.join(os.path.dirname(os.path.dirname(
 # unambiguous alphabet - no O/0, no I/1/L
 CODE_ALPHABET = "ABCDEFGHJKMNPQRSTUVWXYZ23456789"
 
+# How much standing detail one player may keep pinned in front of the DM. Every one of
+# these rides on every turn that character takes, so a party of six could otherwise push
+# several thousand characters of preamble ahead of the actual scene.
+MAX_NOTES_CHARS = 600
+
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS campaigns (
     id          TEXT PRIMARY KEY,
@@ -35,6 +40,7 @@ CREATE TABLE IF NOT EXISTS characters (
     player_token TEXT,
     name         TEXT NOT NULL,
     data         TEXT NOT NULL,
+    notes        TEXT NOT NULL DEFAULT '',
     created_at   REAL NOT NULL
 );
 
@@ -107,6 +113,8 @@ def _migrate(conn):
     chcols = {r["name"] for r in conn.execute("PRAGMA table_info(characters)")}
     if "portrait" not in chcols:
         conn.execute("ALTER TABLE characters ADD COLUMN portrait TEXT NOT NULL DEFAULT ''")
+    if "notes" not in chcols:
+        conn.execute("ALTER TABLE characters ADD COLUMN notes TEXT NOT NULL DEFAULT ''")
 
 
 def _uid():
@@ -198,15 +206,31 @@ def delete_campaign(cid):
 # characters
 # --------------------------------------------------------------------------- #
 
-def add_character(cid, char, token):
+def add_character(cid, char, token, notes=""):
     conn = db()
     chid, now = _uid(), time.time()
     conn.execute(
-        "INSERT INTO characters (id, campaign_id, player_token, name, data, created_at)"
-        " VALUES (?,?,?,?,?,?)",
-        (chid, cid, token, char["name"], json.dumps(char, ensure_ascii=False), now))
+        "INSERT INTO characters (id, campaign_id, player_token, name, data, notes,"
+        " created_at) VALUES (?,?,?,?,?,?,?)",
+        (chid, cid, token, char["name"], json.dumps(char, ensure_ascii=False),
+         clean_notes(notes), now))
     conn.commit()
     return chid
+
+
+def clean_notes(text):
+    """One player's standing notes, trimmed to something the story can carry."""
+    return (text or "").strip()[:MAX_NOTES_CHARS]
+
+
+def set_character_notes(char_id, text):
+    """Replace one character's notes. Returns what was actually stored, which is what
+    the player should see back - the cap is enforced here, not in the browser."""
+    notes = clean_notes(text)
+    conn = db()
+    conn.execute("UPDATE characters SET notes=? WHERE id=?", (notes, char_id))
+    conn.commit()
+    return notes
 
 
 # --------------------------------------------------------------------------- #
@@ -244,16 +268,21 @@ def delete_lore(cid, lid):
 
 def party(cid):
     rows = db().execute(
-        "SELECT id, player_token, data, portrait FROM characters WHERE campaign_id=?"
-        " ORDER BY created_at", (cid,)).fetchall()
+        "SELECT id, player_token, data, portrait, notes FROM characters"
+        " WHERE campaign_id=? ORDER BY created_at", (cid,)).fetchall()
     out = []
     for r in rows:
         ch = json.loads(r["data"])
         ch["_id"] = r["id"]
         ch["_token"] = r["player_token"]
         ch["portrait"] = r["portrait"] or ""
+        ch["notes"] = r["notes"] or ""
         out.append(ch)
     return out
+
+
+# columns of their own, so they must not be written back into the character's data blob
+COLUMN_FIELDS = ("portrait", "notes")
 
 
 def save_party(characters):
@@ -261,7 +290,7 @@ def save_party(characters):
     conn = db()
     for ch in characters:
         data = {k: v for k, v in ch.items()
-                if not k.startswith("_") and k != "portrait"}
+                if not k.startswith("_") and k not in COLUMN_FIELDS}
         conn.execute("UPDATE characters SET data=?, name=? WHERE id=?",
                      (json.dumps(data, ensure_ascii=False), data["name"], ch["_id"]))
     conn.commit()
@@ -269,12 +298,13 @@ def save_party(characters):
 
 def character_for_token(cid, token):
     row = db().execute(
-        "SELECT id, data FROM characters WHERE campaign_id=? AND player_token=?",
+        "SELECT id, data, notes FROM characters WHERE campaign_id=? AND player_token=?",
         (cid, token)).fetchone()
     if not row:
         return None
     ch = json.loads(row["data"])
     ch["_id"] = row["id"]
+    ch["notes"] = row["notes"] or ""
     return ch
 
 
@@ -432,7 +462,10 @@ def import_campaign(blob):
     for ch in blob.get("characters", []):
         token = ch.pop("_token", None)
         portrait = id_map.get(ch.pop("portrait", "") or "", "")
-        chid = add_character(cid, ch, token)
+        # portrait and notes are columns, not part of the sheet blob - lift them out
+        # before the rest of the character is stored
+        notes = ch.pop("notes", "")
+        chid = add_character(cid, ch, token, notes)
         if portrait:
             conn.execute("UPDATE characters SET portrait=? WHERE id=?", (portrait, chid))
 

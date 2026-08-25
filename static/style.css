@@ -361,6 +361,12 @@ button:disabled { opacity: .45; cursor: default; }
   color: #1a1408; font-size: 17px;
 }
 
+/* standing notes: what this player wants for their own character, kept in the drawer */
+/* var(--line) rather than a number: Thai needs the extra leading it already carries */
+#notes { resize: vertical; min-height: 92px; line-height: var(--line); }
+.notes-row { display: flex; align-items: center; gap: 12px; margin-top: 10px; }
+.notes-row .hint { margin: 0; font-family: var(--mono); font-size: 12px; }
+
 /* campaign library: the player's own documents, listed in the drawer */
 .lore-chip { border-color: var(--blue); color: #bcd7e6; font-style: italic; }
 .lore-list { display: flex; flex-direction: column; gap: 6px; margin-top: 8px; }
