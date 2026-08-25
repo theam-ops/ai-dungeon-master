@@ -184,6 +184,19 @@ def save_history(cid, history):
     conn.commit()
 
 
+def note_in_history(cid, text):
+    """Put something into the campaign transcript that no player typed.
+
+    Used when a character arrives mid-story: the party state block regrows by itself,
+    but a name silently appearing in it reads to the DM as its own continuity error
+    rather than as somebody walking in.
+    """
+    history = get_history(cid)
+    history.append({"role": "user", "content": text})
+    save_history(cid, history)
+    return history
+
+
 def campaigns_for_token(token):
     """Every campaign this browser has a character in, most recent first."""
     rows = db().execute(

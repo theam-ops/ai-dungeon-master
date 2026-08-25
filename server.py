@@ -447,8 +447,24 @@ async def add_or_claim(request: Request, cid: str, body: dict = Body(...)):
 
     char = _make_character(body.get("character") or {}, store.campaign_lang(cid))
     store.add_character(cid, char, token)
+    await announce_arrival(cid, char["name"])
     await publish(cid, "join", {"character": char["name"]})
     return {"ok": True, "character": char}
+
+
+async def announce_arrival(cid, name):
+    """Tell the DM, not just the table, that somebody new is at it.
+
+    Under the turn lock: a turn in flight is holding the history list in memory and
+    saves it when it finishes, so writing outside the lock would be overwritten.
+    """
+    if not store.get_history(cid):
+        return          # the story hasn't started; `begin` introduces the whole party
+    async with locks[cid]:
+        store.note_in_history(cid, (
+            f"<table_note>{name} has just joined the party, mid-story. They are in the "
+            "party state from here on. Bring them into the scene in your next narration "
+            "- give them a reason to be here and a moment of their own.</table_note>"))
 
 
 @app.get("/api/campaigns/{cid}")
@@ -479,10 +495,26 @@ async def set_notes(request: Request, cid: str, body: dict = Body(...)):
     return {"ok": True, "notes": notes, "notes_max": store.MAX_NOTES_CHARS}
 
 
+def replay(cid, since):
+    """Every event after `since`, oldest first.
+
+    Paged, because `events_since` caps one read: somebody joining a long campaign asks
+    for the story from event zero, and a single capped read would hand them the opening
+    scenes, stop, and then start streaming live events from far past where it stopped -
+    a silent hole in the middle of the story rather than a short one.
+    """
+    while True:
+        batch = store.events_since(cid, since)
+        if not batch:
+            return
+        yield from batch
+        since = batch[-1]["seq"]
+
+
 @app.get("/api/campaigns/{cid}/events")
 async def campaign_events(request: Request, cid: str, since: int = 0):
     require_member(request, cid)
-    return {"events": store.events_since(cid, since)}
+    return {"events": list(replay(cid, since))}
 
 
 @app.delete("/api/campaigns/{cid}")
@@ -506,8 +538,9 @@ async def stream(request: Request, cid: str, since: int = 0):
 
     async def gen():
         try:
-            # replay anything this client missed while it was away
-            for event in store.events_since(cid, since):
+            # replay anything this client missed while it was away - or, for somebody
+            # who just joined, the whole story so far
+            for event in replay(cid, since):
                 yield f"data: {json.dumps(event)}\n\n"
             yield f"data: {json.dumps({'kind': 'ready'})}\n\n"
 
