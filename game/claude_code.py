@@ -26,6 +26,7 @@ import os
 import re
 import shutil
 import subprocess
+import time
 
 from . import providers
 
@@ -73,6 +74,16 @@ def auth_status():
         return {"installed": True, "logged_in": False, "method": ""}
     return {"installed": True, "logged_in": bool(data.get("loggedIn")),
             "method": data.get("authMethod") or ""}
+
+
+# Claude Code will happily authenticate with an API key from the environment. That is a
+# perfectly good way to run Claude Code - it just isn't what this backend is for.
+API_KEY_METHODS = ("api_key", "apikey", "bedrock", "vertex")
+
+
+def is_subscription(state):
+    """Signed in, and by a route a Pro/Max subscription actually pays for."""
+    return bool(state.get("logged_in")) and state.get("method", "") not in API_KEY_METHODS
 
 
 class LoginFlow:
@@ -183,8 +194,35 @@ class ClaudeCodeBackend(providers.Backend):
     key_url = "https://claude.com/download"
     key_env = ""
 
+    _auth_cache = (0.0, False)
+
     def available(self):
-        return bool(cli_path()) and not SDK_ERROR
+        """Installed, signed in, and signed in *on a subscription*.
+
+        Two traps, both of which make this backend claim to be ready when it isn't:
+
+        Expired token - a Claude Code whose OAuth has lapsed still looks installed, so
+        this would advertise itself and then fail over on every single turn.
+
+        API-key auth - if ANTHROPIC_API_KEY is set in this server's environment, Claude
+        Code reports `loggedIn: true` with `authMethod: api_key` and bills that key.
+        This backend exists precisely so a subscription pays instead of credit, so
+        claiming to be "Claude Pro/Max" while quietly spending an API key would be
+        worse than being unavailable.
+
+        `auth status` shells out, so the answer is cached briefly - the AI picker asks
+        this of every backend it lists.
+        """
+        if not cli_path() or SDK_ERROR:
+            return False
+        cls = ClaudeCodeBackend
+        now = time.monotonic()
+        when, ok = cls._auth_cache
+        if now - when < 15:
+            return ok
+        ok = is_subscription(auth_status())
+        cls._auth_cache = (now, ok)
+        return ok
 
     def env_name(self):
         return ""
@@ -198,6 +236,11 @@ class ClaudeCodeBackend(providers.Backend):
             return False, "Claude Code is not installed on this machine"
         if not state["logged_in"]:
             return False, "Claude Code is installed but not signed in"
+        if not is_subscription(state):
+            return False, ("Claude Code is signed in with an API key, not a Claude "
+                           "subscription - turns would be billed to that key. Unset "
+                           "ANTHROPIC_API_KEY for this server, or pick a Claude "
+                           "backend instead")
         return True, ""
 
     def _options(self, system, mcp, cid=None):

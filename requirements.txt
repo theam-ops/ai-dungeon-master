@@ -4,3 +4,7 @@ uvicorn[standard]>=0.30
 itsdangerous>=2.0
 Pillow>=10.0
 python-multipart>=0.0.9
+
+# Only needed for the "Claude Pro/Max (this machine)" backend, which runs
+# turns through an installed Claude Code. Everything else works without it.
+claude-agent-sdk>=0.2
