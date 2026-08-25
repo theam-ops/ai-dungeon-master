@@ -1,0 +1,9 @@
+# Everything needed to run the tests, on top of requirements.txt:
+#
+#   pip install -r requirements.txt -r requirements-dev.txt
+#   python -m pytest
+#
+# No API key is needed and none is used - the tests drive a stub backend, so nothing
+# here ever calls a real model.
+-r requirements.txt
+pytest>=8.0
