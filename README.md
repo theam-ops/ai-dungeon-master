@@ -347,6 +347,29 @@ sees who did what. It won't make you wait for an initiative order.
 and pick your existing character from the list instead of making a new one. The
 character moves to that device.
 
+**Joining late is the normal case.** A campaign that has been running for hours takes a
+new player the same way an empty one does: they get the whole story replayed into their
+feed on the way in, and the DM is told at that point in the transcript that somebody has
+arrived, so it writes them into the scene instead of finding a stranger already in the
+party.
+
+### Notes for the DM
+
+In the character sheet drawer, under **Notes for the DM**, each player keeps standing
+details about their own character — the tone they want, backstory they have decided on, a
+thread they want picked up, something they would rather the game left alone:
+
+> Vess has been afraid of fire since her village burned, and is looking for the brother
+> who walked out on her. I'd rather chase a mystery than fight a war.
+
+They ride along with every turn *that* character takes, and only that one — another
+player's preferences are not in the DM's ear on a turn that isn't theirs. Only you can
+edit yours, nobody else at the table is sent them, and they travel with **Export**.
+
+They are capped at 600 characters, deliberately: every one of them is re-sent on every
+turn, and six players' worth of preamble would push the actual scene down the prompt.
+Write what should always be true, not what you are doing this turn.
+
 ## ภาษาไทย — Thai support
 
 Tap **ไทย** in the language switcher (on the login screen, at the bottom of the lobby,
@@ -430,6 +453,7 @@ renamed export still imports.
 | 📁 (beside 📎) | Attach a whole folder — it takes the images and ignores the rest |
 | Campaign library | In the sheet drawer: import a folder of your own art and notes |
 | Portrait / Scene art | In the sheet drawer: upload, link, or generate |
+| Notes for the DM | In the sheet drawer: standing details about your own character |
 | ★ (top right) | Character sheet, private dice, share code, export |
 | ☰ (top left) | Back to the lobby |
 | Party bar | Everyone's HP, live — red border means down at 0 |
@@ -500,7 +524,20 @@ server.py        FastAPI: auth, campaigns, SSE stream, actions
 static/i18n.js   interface strings for the browser
 static/          the rest of the UI — no build step
 dnd.py           terminal client, same DM
+tests/           pytest, driven by a stub DM — no API key, no model call
 ```
+
+## Running the tests
+
+```bash
+pip install -r requirements-dev.txt
+python -m pytest
+```
+
+They need no API key and never reach a model: a stub backend stands in for the AI and
+records what it was handed, which is how the tests can assert that a player's own notes
+and the right party state genuinely arrived in the prompt rather than merely being saved
+somewhere.
 
 Sheet changes travel as structured data (`{"t": "hp", "from": 8, "to": 5}`) rather than
 a pre-written English sentence, so each browser renders them in its own language.
