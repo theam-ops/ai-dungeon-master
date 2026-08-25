@@ -150,6 +150,12 @@ def test_an_artist_puts_the_tool_on_the_table(registry, campaign):
     assert "draw_scene" in [t["name"] for t in dm.tools_for(campaign)]
 
 
+def test_the_terminal_client_is_not_offered_it(registry):
+    """No campaign means no feed to put a picture in - dnd.py is text and stays text."""
+    registry(StubDM([]), StubArtist())
+    assert "draw_scene" not in [t["name"] for t in dm.tools_for(None)]
+
+
 def test_calling_it_anyway_is_an_error_not_a_crash(registry, campaign):
     """The tool is withheld, but a model can still name it. It must not blow up."""
     registry(StubDM([]))

@@ -8,3 +8,4 @@ saves/
 .venv/
 .keys.json
 media/
+.pytest_cache/

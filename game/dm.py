@@ -145,7 +145,6 @@ LORE_TOOL = {
 }
 
 
-
 # Offered only when some backend can actually draw. Same reasoning as the lore tool:
 # a model handed a tool with nothing behind it will still reach for it, and here the
 # reach costs a turn's narration to a tool call that was always going to fail.
@@ -185,7 +184,9 @@ def tools_for(cid):
     tools = list(TOOLS)
     if cid and store.lore_documents(cid):
         tools.append(LORE_TOOL)
-    if providers.image_backend() is not None:
+    # no campaign means no feed and nowhere to file the picture - that is the terminal
+    # client, which is text and stays text
+    if cid and providers.image_backend() is not None:
         tools.append(IMAGE_TOOL)
     return tools
 
