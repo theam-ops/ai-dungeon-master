@@ -616,6 +616,7 @@ $("library-dir").onchange = async (e) => {
   $("library-note").textContent =
     totals.skipped ? `${summary} ${t("library_skipped", totals.skipped)}` : summary;
   renderLore();
+  renderGallery();
 };
 
 function isLibraryFile(f) {
@@ -695,6 +696,59 @@ $("btn-notes-save").onclick = async () => {
     btn.disabled = false;
   }
 };
+
+/* ── gallery: every picture this campaign holds ─────────────────────── */
+
+/* Art arrives from four places - uploaded, linked, drawn by the DM, or brought in by a
+   folder import - and only the shared ones ever scroll past in the feed. A campaign that
+   imported two dozen NPC portraits had nowhere at all to look at them. */
+async function renderGallery() {
+  const box = $("gallery");
+  const note = $("gallery-note");
+  box.innerHTML = "";
+  let items;
+  try {
+    items = (await api(`/api/campaigns/${S.campaign.id}/media`)).media;
+  } catch (_) {
+    note.textContent = "";
+    return;
+  }
+  if (!items.length) {
+    note.textContent = t("gallery_empty");
+    return;
+  }
+  note.textContent = t("gallery_count", items.length);
+
+  items.forEach((m) => {
+    const cell = el("figure", "shot");
+    const img = el("img");
+    img.src = mediaUrl(m.id);
+    img.alt = m.caption || "";
+    img.loading = "lazy";                    // two dozen of them at once, on a phone
+    img.onclick = () => openLightbox(img.src, m.caption);
+    cell.append(img);
+    if (m.caption) cell.append(el("figcaption", "", m.caption));
+
+    const drop = el("button", "shot-del", "\u00d7");
+    drop.type = "button";
+    drop.title = t("gallery_remove");
+    drop.setAttribute("aria-label", t("gallery_remove"));
+    drop.onclick = async (e) => {
+      e.stopPropagation();
+      drop.disabled = true;
+      try {
+        await api(`/api/campaigns/${S.campaign.id}/media/${m.id}`, { method: "DELETE" });
+        renderGallery();
+      } catch (err) {
+        note.textContent = err.message;
+        drop.disabled = false;
+      }
+    };
+    cell.append(drop);
+    box.append(cell);
+  });
+}
+
 
 /* ── which AI runs the game ─────────────────────────────────────────── */
 
@@ -1448,7 +1502,7 @@ function renderSheet() {
 function openDrawer(open) {
   $("drawer").classList.toggle("hidden", !open);
   $("scrim").classList.toggle("hidden", !open);
-  if (open) { renderSheet(); renderAI(); renderPortrait(); renderLore(); fillNotes();
+  if (open) { renderSheet(); renderAI(); renderPortrait(); renderLore(); renderGallery(); fillNotes();
               $("library-note").textContent = t("library_hint"); }
   else $("ai-list").classList.add("hidden");
 }

@@ -491,6 +491,7 @@ renamed export still imports.
 | 📎 (beside the message box) | Attach an image to your next action |
 | 📁 (beside 📎) | Attach a whole folder — it takes the images and ignores the rest |
 | Campaign library | In the sheet drawer: import a folder of your own art and notes |
+| Gallery | Below it: every picture the campaign holds. Tap one for full size |
 | Portrait / Scene art | In the sheet drawer: upload, link, or generate |
 | Notes for the DM | In the sheet drawer: standing details about your own character |
 | ★ (top right) | Character sheet, private dice, share code, export |

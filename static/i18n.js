@@ -90,6 +90,10 @@ const STRINGS = {
 
     attach: "Attach an image",
     library: "Campaign library",
+    gallery: "Gallery",
+    gallery_empty: "No pictures in this campaign yet.",
+    gallery_count: "{0} pictures. Tap one to see it full size.",
+    gallery_remove: "Remove this picture",
     ai_checking: "checking…",
     claude_signin: "Sign in with Claude",
     claude_signin_step: "Open the link, approve it, then paste the code Anthropic shows you.",
@@ -253,6 +257,10 @@ const STRINGS = {
 
     attach: "แนบรูปภาพ",
     library: "คลังแคมเปญ",
+    gallery: "คลังภาพ",
+    gallery_empty: "ยังไม่มีรูปภาพในแคมเปญนี้",
+    gallery_count: "{0} ภาพ แตะเพื่อดูขนาดเต็ม",
+    gallery_remove: "ลบภาพนี้",
     ai_checking: "กำลังตรวจสอบ…",
     claude_signin: "เข้าสู่ระบบด้วย Claude",
     claude_signin_step: "เปิดลิงก์ อนุมัติ แล้ววางรหัสที่ Anthropic แสดงให้",
