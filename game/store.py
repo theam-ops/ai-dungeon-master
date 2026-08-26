@@ -25,6 +25,7 @@ CREATE TABLE IF NOT EXISTS campaigns (
     lang        TEXT NOT NULL DEFAULT 'en',
     backend     TEXT NOT NULL DEFAULT '',
     history     TEXT NOT NULL DEFAULT '[]',
+    last_art    REAL NOT NULL DEFAULT 0,
     created_at  REAL NOT NULL,
     updated_at  REAL NOT NULL
 );
@@ -104,6 +105,8 @@ def _migrate(conn):
         conn.execute("ALTER TABLE campaigns ADD COLUMN lang TEXT NOT NULL DEFAULT 'en'")
     if "backend" not in cols:
         conn.execute("ALTER TABLE campaigns ADD COLUMN backend TEXT NOT NULL DEFAULT ''")
+    if "last_art" not in cols:
+        conn.execute("ALTER TABLE campaigns ADD COLUMN last_art REAL NOT NULL DEFAULT 0")
     chcols = {r["name"] for r in conn.execute("PRAGMA table_info(characters)")}
     if "portrait" not in chcols:
         conn.execute("ALTER TABLE characters ADD COLUMN portrait TEXT NOT NULL DEFAULT ''")
@@ -375,6 +378,37 @@ def turns_in_last_minute(cid):
         "SELECT COUNT(*) AS n FROM events WHERE campaign_id=? AND kind='player' AND created_at>?",
         (cid, cutoff)).fetchone()
     return row["n"]
+
+
+def claim_art_slot(cid, every_turns):
+    """Take this campaign's illustration slot if it is free. True at most once every
+    `every_turns` player turns.
+
+    The DM asks for a picture through a tool, so the only thing standing between a
+    chatty model and a large bill is this function - not the wording of the prompt.
+    The slot is claimed here, before anything is drawn: a slot spent on a generation
+    that then fails is the cheap mistake, one handed out twice is the expensive one.
+    Read and write are one statement apart with no await between them, so two tool
+    calls in the same turn cannot both walk through it.
+
+    A campaign that has never been illustrated gets its first one immediately - that
+    is the opening scene, which usually has more reason to be drawn than anything
+    after it.
+    """
+    conn = db()
+    row = conn.execute("SELECT last_art FROM campaigns WHERE id=?", (cid,)).fetchone()
+    if row is None:
+        return False
+    last = row["last_art"] or 0
+    if last:
+        since = conn.execute(
+            "SELECT COUNT(*) AS n FROM events WHERE campaign_id=? AND kind='player'"
+            " AND created_at>?", (cid, last)).fetchone()["n"]
+        if since < every_turns:
+            return False
+    conn.execute("UPDATE campaigns SET last_art=? WHERE id=?", (time.time(), cid))
+    conn.commit()
+    return True
 
 
 # --------------------------------------------------------------------------- #

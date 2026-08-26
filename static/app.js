@@ -1099,7 +1099,10 @@ function handle(ev) {
 
     case "image": {
       const box = el("div", "image-line");
-      if (ev.character && ev.source !== "generated") {
+      if (ev.source === "dm") {
+        // nobody at the table asked for this one — say where it came from
+        box.append(el("div", "who", t("dm_drew")));
+      } else if (ev.character && ev.source !== "generated") {
         box.append(el("div", "who", t("shows_image", ev.character)));
       }
       const img = el("img");
