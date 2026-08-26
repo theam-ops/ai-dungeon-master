@@ -4,9 +4,16 @@ The model narrates and judges. Every die and every point of damage goes through
 `rules.py` here in Python, so the DM cannot invent a roll or lose track of your HP.
 """
 
+import os
+
 from . import i18n, lore, providers, rules, store
 
 MAX_TOOL_ROUNDS = 12
+
+# How many player turns must pass between two DM-drawn pictures. Drawing costs real
+# money on every provider that offers it, and the model is not the one paying, so this
+# is a number enforced in code rather than a request in the prompt.
+ART_EVERY_TURNS = int(os.environ.get("DM_ART_EVERY_TURNS", "6"))
 
 
 SYSTEM = """\
@@ -138,11 +145,50 @@ LORE_TOOL = {
 }
 
 
+# Offered only when some backend can actually draw. Same reasoning as the lore tool:
+# a model handed a tool with nothing behind it will still reach for it, and here the
+# reach costs a turn's narration to a tool call that was always going to fail.
+IMAGE_TOOL = {
+    "name": "draw_scene",
+    "description": (
+        "Illustrate what is in front of the party right now. The picture is drawn while "
+        "you keep narrating and appears in the feed for everyone a moment later, so "
+        "don't announce it, wait for it, or describe it as arriving. "
+        "Save it for a moment that earns a picture - a first sight of somewhere, a "
+        "creature revealed, the aftermath of a fight - not for every turn: it costs "
+        "money and it is rate limited. If the tool answers NOT NOW, that is normal; "
+        "carry on narrating and do not call it again this turn."
+    ),
+    "strict": True,
+    "input_schema": {
+        "type": "object",
+        "properties": {
+            "prompt": {"type": "string",
+                       "description": ("What to draw, for an image model that has not "
+                                       "read the story: subject, setting, light, mood. "
+                                       "Describe the picture, not the plot. English "
+                                       "works best here whatever language you narrate in.")},
+            "caption": {"type": "string",
+                        "description": ("A short line shown under the picture, in the "
+                                        "language you are narrating in.")},
+        },
+        "required": ["prompt", "caption"],
+        "additionalProperties": False,
+    },
+}
+
+
 def tools_for(cid):
-    """The tool list for this campaign: the base two, plus lore when there is any."""
+    """The tool list for this campaign: the base two, plus lore when there is any,
+    plus drawing when some backend can draw."""
+    tools = list(TOOLS)
     if cid and store.lore_documents(cid):
-        return TOOLS + [LORE_TOOL]
-    return TOOLS
+        tools.append(LORE_TOOL)
+    # no campaign means no feed and nowhere to file the picture - that is the terminal
+    # client, which is text and stays text
+    if cid and providers.image_backend() is not None:
+        tools.append(IMAGE_TOOL)
+    return tools
 
 
 def _find(characters, name):
@@ -157,6 +203,34 @@ def _find(characters, name):
     return None
 
 
+def _draw_scene(args, cid):
+    """Ask for an illustration. Nothing is drawn here - drawing takes half a minute and
+    this runs in the middle of a turn, so all that happens is the rate limit is checked
+    and a request is emitted. Whoever is driving the turn does the slow part out of band.
+
+    Every refusal is phrased for the model rather than the player: it is a tool result,
+    and the DM should absorb it and keep narrating instead of telling the table about it.
+    """
+    if providers.image_backend() is None:
+        return "ERROR: nothing here can draw. Describe the scene in words instead.", None
+    if not cid:
+        return "ERROR: this campaign cannot show pictures.", None
+
+    prompt = (args.get("prompt") or "").strip()[:800]
+    if not prompt:
+        return "ERROR: say what to draw.", None
+
+    if not store.claim_art_slot(cid, ART_EVERY_TURNS):
+        return (f"NOT NOW: the table was illustrated recently. Another picture is "
+                f"available after {ART_EVERY_TURNS} more player turns. Keep narrating "
+                f"and do not mention this."), None
+
+    return ("Drawing it now; it will appear in the feed by itself shortly. Carry on "
+            "with the scene and do not refer to the picture.",
+            {"kind": "draw", "prompt": prompt,
+             "caption": (args.get("caption") or "").strip()[:200]})
+
+
 def run_tool(name, args, characters, lang="en", cid=None):
     """Execute a DM tool call. Returns (tool_result_text, event_or_None)."""
     if name == "search_lore":
@@ -165,6 +239,9 @@ def run_tool(name, args, characters, lang="en", cid=None):
         found = lore.search(store.lore_texts(cid), args.get("query"),
                             args.get("document") or None)
         return found, {"kind": "lore", "query": (args.get("query") or "")[:80]}
+
+    if name == "draw_scene":
+        return _draw_scene(args, cid)
 
     if name == "roll_dice":
         try:
@@ -329,7 +406,10 @@ async def take_turn(history, characters, actor, action, lang="en", backend_id=No
                     images=None, cid=None):
     """Run one DM turn. Async generator of events; mutates history and characters.
 
-    Yields {"kind": "delta"|"narration"|"dice"|"sheet"|"switch"|"error", ...}.
+    Yields {"kind": "delta"|"narration"|"dice"|"sheet"|"draw"|"switch"|"error", ...}.
+
+    "draw" is the odd one out: it is a request rather than something that happened, and
+    the caller is expected to go and generate the picture without holding up the turn.
 
     If the chosen AI is out of credit or rate limited, the turn restarts on the next
     configured one and emits a "switch" event naming who took over.
