@@ -156,14 +156,59 @@ function renderLobby(campaigns) {
   list.innerHTML = "";
   $("continue-block").classList.toggle("hidden", !campaigns || !campaigns.length);
   (campaigns || []).forEach((c) => {
+    // the row is a button, so the delete control is its sibling rather than nested
+    // inside it - a button within a button is invalid and swallows the click
+    const item = el("div", "campaign-item");
     const row = el("button", "campaign-row");
     const left = el("div");
     left.append(el("div", "cname", c.name));
     left.append(el("div", "cmeta", t("playing_as", c.character_name)));
     row.append(left, el("div", "ccode", c.code));
     row.onclick = () => enterCampaign(c.id).catch((e) => ($("lobby-err").textContent = e.message));
-    list.append(row);
+
+    const drop = el("button", "campaign-del", "×");
+    drop.type = "button";
+    drop.title = t("delete_campaign");
+    drop.setAttribute("aria-label", t("delete_campaign"));
+    drop.onclick = () => confirmDelete(item, c);
+
+    item.append(row, drop);
+    list.append(item);
   });
+}
+
+/* Deleting takes the story and its pictures with it and there is no undo, so it asks
+   first - in the row itself rather than through a browser dialog, which is easy to
+   dismiss without reading and which some browsers suppress outright. */
+function confirmDelete(item, c) {
+  const saved = [...item.childNodes];        // put back on cancel
+  const ask = el("div", "campaign-confirm");
+  ask.append(el("div", "warn", t("delete_sure", c.name)));
+
+  const yes = el("button", "danger", t("delete_yes"));
+  yes.type = "button";
+  yes.onclick = async () => {
+    yes.disabled = true;
+    try {
+      await api(`/api/campaigns/${c.id}`, { method: "DELETE" });
+      if (localStorage.getItem("campaign_id") === c.id) localStorage.removeItem("campaign_id");
+      await refreshUI();
+      toast(t("deleted", c.name));
+    } catch (e) {
+      $("lobby-err").textContent = e.message;
+      yes.disabled = false;
+    }
+  };
+
+  const no = el("button", "ghost", t("cancel"));
+  no.type = "button";
+  no.onclick = () => { ask.replaceWith(...saved); };
+
+  const buttons = el("div", "row");
+  buttons.append(yes, no);
+  ask.append(buttons);
+  item.replaceChildren(ask);
+  yes.focus();
 }
 
 /* Paste an API key straight into the running server — no setx, no restart.

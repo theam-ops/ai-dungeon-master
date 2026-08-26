@@ -139,6 +139,27 @@ button:disabled { opacity: .45; cursor: default; }
   border-radius: 10px; text-align: left; width: 100%; color: var(--parchment);
 }
 .campaign-row:hover { border-color: var(--gold-dim); }
+
+/* the row and its delete control sit side by side; the row keeps all the width */
+.campaign-item { display: flex; align-items: stretch; gap: 6px; }
+.campaign-item .campaign-row { flex: 1 1 auto; min-width: 0; }
+.campaign-del {
+  flex: 0 0 auto; width: 40px; border-radius: 10px; font-size: 18px; line-height: 1;
+  background: var(--ink-3); border: 1px solid var(--edge); color: var(--muted);
+}
+.campaign-del:hover { border-color: var(--red); color: var(--red); }
+
+.campaign-confirm {
+  flex: 1 1 auto; display: flex; flex-direction: column; gap: 10px;
+  padding: 12px 14px; border-radius: 10px;
+  background: var(--ink-3); border: 1px solid var(--red);
+}
+.campaign-confirm .warn { font-size: 14px; line-height: 1.5; }
+.campaign-confirm .row { display: flex; gap: 8px; }
+.campaign-confirm .danger {
+  background: var(--red); color: #1a0f0b; border: 0; font-weight: 500;
+}
+.campaign-confirm .danger:disabled { opacity: .6; }
 .campaign-row .cname { font-weight: 500; }
 .campaign-row .cmeta { color: var(--muted); font-size: 13px; }
 .campaign-row .ccode { font-family: var(--mono); font-size: 12px; color: var(--gold-dim); }

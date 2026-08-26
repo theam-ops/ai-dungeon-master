@@ -495,6 +495,7 @@ renamed export still imports.
 | Notes for the DM | In the sheet drawer: standing details about your own character |
 | ★ (top right) | Character sheet, private dice, share code, export |
 | ☰ (top left) | Back to the lobby |
+| × (beside a campaign in the lobby) | Delete it — asks first, and there is no undo |
 | Party bar | Everyone's HP, live — red border means down at 0 |
 | HUD (above the message box) | Your HP, AC, conditions and the last four rolls — tap it for the full sheet |
 | ▾ (right of the HUD) | Collapse the HUD to just your name and HP; the choice sticks |
