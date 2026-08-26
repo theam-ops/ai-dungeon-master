@@ -1,10 +1,11 @@
-# Everything the game needs, plus the test runner.
+# Everything needed to run the test suite:
 #
 #     pip install -r requirements-dev.txt
 #     python -m pytest
 #
-# The suite stubs every backend, so it needs no API key and spends nothing.
-
+# The tests need no API key and no Claude Code sign-in. `tests/stub_backend.py`
+# implements the same contract as `game/providers.Backend.stream`, so a whole session
+# runs without any model being called, and spends nothing.
 -r requirements.txt
 
-pytest>=8
+pytest>=8.0

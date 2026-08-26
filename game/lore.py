@@ -32,6 +32,54 @@ SPACES_RE = re.compile(r"[ \t]+")
 MAX_SCRIPT = 200_000
 
 
+# Notes people have actually been keeping are not all UTF-8. A Thai campaign's notes
+# are very often plain .txt saved out of Windows Notepad, which until recently defaulted
+# to the system ANSI codepage - CP874 for a Thai Windows - and "Unicode" in that Save As
+# dialog means UTF-16, not UTF-8. Both decode as mojibake under `errors="replace"` and
+# import silently: the document lands, `search_lore` finds nothing in it ever, and
+# nothing tells anyone why.
+BOMS = ((b"\xff\xfe", "utf-16"), (b"\xfe\xff", "utf-16"), (b"\xef\xbb\xbf", "utf-8-sig"))
+# A run of three, not a single character: CP874 maps every high byte to something in the
+# Thai block, so one hit proves nothing - "café" in CP1252 decodes to a Latin word with
+# one Thai character in it. Actual Thai prose comes in long unbroken runs.
+THAI_RUN_RE = re.compile(r"[฀-๿]{3,}")
+
+
+def decode(raw):
+    """Bytes off someone's disk as text, trying the encodings their notes really use.
+
+    Order matters and is deliberate:
+
+    1. A byte-order mark settles UTF-16 and UTF-8-with-BOM outright.
+    2. Strict UTF-8, so a correct modern file is never second-guessed.
+    3. CP874 - but only if the result actually contains Thai. CP874 decodes almost any
+       byte string without complaint, so accepting it unconditionally would turn a
+       legacy *Western* file into confident Thai gibberish. Requiring Thai in the output
+       keeps this rescue narrow to the files it is for.
+    4. UTF-8 with replacement, which is what this did before and so can only be an
+       improvement - nothing that used to import now fails.
+    """
+    if isinstance(raw, str):
+        return raw
+    for bom, enc in BOMS:
+        if raw.startswith(bom):
+            try:
+                return raw.decode(enc)
+            except (UnicodeDecodeError, LookupError):
+                break
+    try:
+        return raw.decode("utf-8")
+    except UnicodeDecodeError:
+        pass
+    try:
+        thai = raw.decode("cp874")
+    except (UnicodeDecodeError, LookupError):
+        thai = ""
+    if THAI_RUN_RE.search(thai):
+        return thai
+    return raw.decode("utf-8", errors="replace")
+
+
 def to_text(name, raw):
     """A document as searchable plain text. HTML gets stripped; markdown is already text.
 
@@ -40,7 +88,10 @@ def to_text(name, raw):
     a 700KB document with four kilobytes of readable text in it. Embedded base64 images
     go first - they are most of the bytes and none of the meaning - and anything still
     enormous after that is a bundled library, so it is left out.
+
+    `raw` may be bytes or text; bytes go through `decode` above.
     """
+    raw = decode(raw)
     if name.lower().endswith((".html", ".htm")):
         raw = DATA_URI_RE.sub(" ", raw)
         raw = STYLE_RE.sub(" ", raw)

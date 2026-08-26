@@ -24,6 +24,7 @@ At least one AI must be reachable: any key above, or a running Ollama.
 import asyncio
 import io
 import json
+import logging
 import os
 import re
 import secrets
@@ -42,6 +43,8 @@ from game import claude_code, dm, i18n, lore, media, providers, rules, store
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 STATIC = os.path.join(HERE, "static")
+
+log = logging.getLogger("dnd")
 
 APP_PASSWORD = os.environ.get("APP_PASSWORD", "")
 MAX_TURNS_PER_MIN = int(os.environ.get("MAX_TURNS_PER_MIN", "12"))
@@ -96,6 +99,21 @@ async def revalidate_shell(request, call_next):
 subscribers = defaultdict(set)
 # one DM turn at a time per campaign
 locks = defaultdict(asyncio.Lock)
+# campaigns whose opening scene has been asked for but not yet written. `begin` refuses
+# a second call by looking at the saved history, which is only written when the turn
+# ends - so two players tapping Begin at the same moment both passed the check and the
+# campaign opened twice, in two different places.
+beginning = set()
+# asyncio keeps only a weak reference to a task, so a turn with nothing holding on to it
+# can be collected mid-narration. Hold them until they finish.
+running = set()
+
+
+def spawn(coro):
+    task = asyncio.create_task(coro)
+    running.add(task)
+    task.add_done_callback(running.discard)
+    return task
 
 
 # --------------------------------------------------------------------------- #
@@ -378,7 +396,7 @@ def _make_character(spec, lang="en"):
         return rules.new_character(
             (spec.get("name") or "").strip()[:40] or "Nameless",
             spec.get("race"), spec.get("class"), spec.get("scores"), lang)
-    except (ValueError, KeyError, TypeError) as e:
+    except (ValueError, KeyError, TypeError, AttributeError) as e:
         raise HTTPException(400, f"bad character: {e}")
 
 
@@ -435,10 +453,17 @@ async def add_or_claim(request: Request, cid: str, body: dict = Body(...)):
         return {"ok": True, "character": {k: v for k, v in target.items()
                                           if not k.startswith("_")}}
 
-    if len(store.party(cid)) >= 6:
+    roster = store.party(cid)
+    if len(roster) >= 6:
         raise HTTPException(400, "this party is full (6 characters)")
 
     char = _make_character(body.get("character") or {}, store.campaign_lang(cid))
+    # The DM addresses a character by name, and `dm.run_tool` finds it by name, so two
+    # people called Vess is not a cosmetic clash: every point of damage the DM aims at
+    # either of them lands on whichever was created first, and the other is invulnerable.
+    if any(c["name"].strip().lower() == char["name"].strip().lower() for c in roster):
+        raise HTTPException(400, f"someone at this table is already called "
+                                 f"{char['name']} - pick another name")
     store.add_character(cid, char, token)
     await publish(cid, "join", {"character": char["name"]})
     return {"ok": True, "character": char}
@@ -526,6 +551,27 @@ def load_images(cid, media_ids):
     return out
 
 
+SECRETISH_RE = re.compile(r"[{\[<]|(?:sk|gsk|AIza|sk-or|sk-ant)[-_A-Za-z0-9]{6,}")
+
+
+def player_safe(text):
+    """An upstream failure, trimmed to what a player at the table should be shown.
+
+    A provider's error body is written for whoever holds the key, not for six friends
+    on a tunnel: it arrives as raw JSON naming the model, the account state, sometimes
+    request metadata. `dm.take_turn` folds it verbatim into the `error` and `switch`
+    events, which go to everyone. Keep the readable head - "Claude Opus 5: HTTP 429" -
+    and drop the body. The full text still goes to the server log, where the person
+    who can act on it is looking.
+    """
+    text = " ".join(str(text or "").split())
+    cut = SECRETISH_RE.search(text)
+    if cut:
+        text = text[:cut.start()].rstrip(" :,-")
+        text += ")" * max(0, text.count("(") - text.count(")"))
+    return text[:160] or "the AI did not say why"
+
+
 async def run_dm_turn(cid, actor, action, images=None):
     """One DM turn, broadcast to the whole table. Serialized per campaign."""
     async with locks[cid]:
@@ -554,6 +600,11 @@ async def run_dm_turn(cid, actor, action, images=None):
                     asyncio.create_task(illustrate(cid, event["prompt"],
                                                    event.get("caption", "")))
                     continue
+                if kind in ("error", "switch"):
+                    field = "text" if kind == "error" else "reason"
+                    if event.get(field):
+                        log.warning("campaign %s %s: %s", cid, kind, event[field])
+                        event[field] = player_safe(event[field])
                 await publish(cid, kind, event)
                 if kind == "sheet":
                     # persist and push straight away so HP bars move as damage lands
@@ -600,7 +651,7 @@ async def act(request: Request, cid: str, body: dict = Body(...)):
     # the DM gets a nudge the players don't see, so a model that can't look at
     # pictures still knows one was produced
     dm_text = text + (f"\n\n[{me['name']} shows the table an image]" if images else "")
-    asyncio.create_task(run_dm_turn(cid, me["name"], dm_text, images))
+    spawn(run_dm_turn(cid, me["name"], dm_text, images))
     return {"ok": True}
 
 
@@ -610,8 +661,11 @@ async def begin(request: Request, cid: str):
     token, campaign, me = require_member(request, cid)
     require_client()
 
-    if store.get_history(cid):
+    # No `await` between the check and the claim, so this is atomic against the other
+    # request that arrived in the same millisecond.
+    if store.get_history(cid) or cid in beginning:
         raise HTTPException(400, "this campaign has already begun")
+    beginning.add(cid)
 
     party = store.party(cid)
     roster = ", ".join(f"{c['name']} the level {c['level']} {c['race']} {c['class']}"
@@ -624,7 +678,8 @@ async def begin(request: Request, cid: str):
         + ("Give each character a moment in the opening. " if len(party) > 1 else "")
         + "Then hand control to the players."
     )
-    asyncio.create_task(run_dm_turn(cid, None, prompt))
+    spawn(run_dm_turn(cid, None, prompt)).add_done_callback(
+        lambda _t, cid=cid: beginning.discard(cid))
     return {"ok": True}
 
 
@@ -717,14 +772,28 @@ async def import_library(request: Request, cid: str,
         m = _store_image(cid, token, processed, "handout", _caption_from(name), "upload")
         added_images.append(_describe(m))
 
+    # The cap is on what the campaign *holds*, not on what one upload carries. Counting
+    # only this request let someone import 40 documents as often as they liked.
+    already = {d["name"] for d in store.lore_documents(cid)}
+    room = max(0, MAX_LORE_DOCS - len(already))
+    keep, over = [], []
+    for name, raw in documents:
+        if name in already or room > 0:              # replacing one costs no new slot
+            if name not in already:
+                room -= 1
+                already.add(name)
+            keep.append((name, raw))
+        else:
+            over.append(name)
+
     added_docs = []
-    for name, raw in documents[:MAX_LORE_DOCS]:
-        text = lore.to_text(name, raw.decode("utf-8", errors="replace"))
+    for name, raw in keep:
+        text = lore.to_text(name, raw)          # lore.decode works out the encoding
         if not text.strip():
             skipped.append({"name": name, "why": "no readable text in it"})
             continue
         added_docs.append(store.add_lore(cid, name, text))
-    for name, _ in documents[MAX_LORE_DOCS:]:
+    for name in over:
         skipped.append({"name": name, "why": f"over the {MAX_LORE_DOCS}-document limit"})
 
     return {"images": added_images, "documents": added_docs, "skipped": skipped}
@@ -894,7 +963,6 @@ async def export_campaign(request: Request, cid: str):
     # HTTP headers are latin-1, so a Thai (or any non-ASCII) campaign name cannot go in
     # the plain filename. Send an ASCII fallback plus the real name via RFC 5987.
     ascii_name = "".join(c for c in title if c.isascii() and (c.isalnum() or c in " -_")).strip()
-    utf8_name = quote(f"{title}.json", safe="")
     # A campaign with images can't travel as JSON - base64 would bloat it absurdly -
     # so it becomes a zip holding campaign.json plus the image files.
     ext = "zip" if files else "json"
@@ -958,7 +1026,7 @@ async def import_archive(request: Request, file: UploadFile = File(...)):
 
     try:
         campaign = store.import_campaign(blob)
-    except (ValueError, KeyError, TypeError) as e:
+    except (ValueError, KeyError, TypeError, AttributeError) as e:
         raise HTTPException(400, f"that archive isn't a campaign export: {e}")
 
     _restore_media_files(campaign["id"], blob, _zip_reader(zf))
@@ -987,7 +1055,7 @@ async def import_folder(request: Request, campaign: str = Form(...),
 
     try:
         record = store.import_campaign(blob)
-    except (ValueError, KeyError, TypeError) as e:
+    except (ValueError, KeyError, TypeError, AttributeError) as e:
         raise HTTPException(400, f"that folder isn't a campaign export: {e}")
 
     images = {}
@@ -1006,7 +1074,7 @@ async def import_campaign(request: Request, body: dict = Body(...)):
     token = require_auth(request)
     try:
         campaign = store.import_campaign(body)
-    except (ValueError, KeyError, TypeError) as e:
+    except (ValueError, KeyError, TypeError, AttributeError) as e:
         raise HTTPException(400, f"that file isn't a campaign export: {e}")
     # first character becomes yours unless it already belongs to someone
     roster = store.party(campaign["id"])
