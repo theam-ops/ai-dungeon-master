@@ -336,6 +336,19 @@ def claim_character(char_id, token):
 # media
 # --------------------------------------------------------------------------- #
 
+def update_media(cid, mid, caption=None, kind=None):
+    """Retitle or re-file one picture. Returns the row as it now stands, or None."""
+    conn = db()
+    if caption is not None:
+        conn.execute("UPDATE media SET caption=? WHERE campaign_id=? AND id=?",
+                     (caption[:400], cid, mid))
+    if kind is not None:
+        conn.execute("UPDATE media SET kind=? WHERE campaign_id=? AND id=?",
+                     (kind, cid, mid))
+    conn.commit()
+    return get_media(cid, mid)
+
+
 def add_media(cid, file, kind, mime, size, width, height, caption="", source="upload",
               owner=None):
     conn = db()

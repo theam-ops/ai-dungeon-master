@@ -491,7 +491,8 @@ renamed export still imports.
 | 📎 (beside the message box) | Attach an image to your next action |
 | 📁 (beside 📎) | Attach a whole folder — it takes the images and ignores the rest |
 | Campaign library | In the sheet drawer: import a folder of your own art and notes |
-| Gallery | Below it: every picture the campaign holds. Tap one for full size |
+| Gallery | Below it: every picture, shelved as Characters / Scenes / Maps / Handouts |
+| A picture's caption | Tap it to write a real description, or move it to another shelf |
 | Portrait / Scene art | In the sheet drawer: upload, link, or generate |
 | Notes for the DM | In the sheet drawer: standing details about your own character |
 | ★ (top right) | Character sheet, private dice, share code, export |
@@ -512,8 +513,12 @@ If you have been running a game by hand, the notes and art come with you. Open t
 character sheet drawer, find **Campaign library**, and point **Import a folder of your
 own material** at the folder you keep it in. It sorts the folder out itself:
 
-- **Images** (`.png`, `.jpg`, `.webp`, `.gif`) become campaign handouts, captioned from
-  their file names — `NPC_Aria_Venn.png` becomes *Aria Venn*. Up to 60 per campaign.
+- **Images** (`.png`, `.jpg`, `.webp`, `.gif`) are captioned from their file names —
+  `NPC_Aria_Venn.png` becomes *Aria Venn* — and shelved by the folder they came in:
+  `NPC/` and `Characters/` become **Characters**, `Place/` and `Scenes/` become
+  **Scenes**, `Maps/` becomes **Maps**, anything loose becomes a handout. Only the
+  folder is read, never the file name: *Kentuckai_Father.png* says who, not what kind
+  of picture it is. Up to 60 per campaign.
 - **Documents** (`.md`, `.txt`, `.html`) become notes the DM can search. Up to 40, and
   4MB each.
 - Everything else is ignored, and the count of what was skipped is reported rather than

@@ -741,7 +741,11 @@ async def begin(request: Request, cid: str):
 # images
 # --------------------------------------------------------------------------- #
 
-VALID_KINDS = ("portrait", "scene", "handout", "map")
+# "portrait" is the one with behaviour: it goes on the character sheet and is resized
+# smaller for it. The rest are shelves in the gallery - "npc" for the faces at the table,
+# "scene" for places and moments, "map", and "handout" for everything else.
+VALID_KINDS = ("portrait", "npc", "scene", "map", "handout")
+GALLERY_KINDS = ("npc", "scene", "map", "handout")
 
 
 def _store_image(cid, token, data_tuple, kind, caption, source):
@@ -793,15 +797,19 @@ async def import_library(request: Request, cid: str,
                          files: list[UploadFile] = File(default=[])):
     """Bring a folder of the players' own campaign material into this campaign.
 
-    Images become handouts captioned from their file names; text documents become lore
-    the DM can search. Everything else is ignored, so pointing this at a working folder
-    full of odds and ends does the sensible thing rather than failing.
+    Images are captioned from their file names and shelved by the folder they arrived
+    in - NPC/ becomes faces, Place/ becomes scenes - and text documents become lore the
+    DM can search. Everything else is ignored, so pointing this at a working folder full
+    of odds and ends does the sensible thing rather than failing.
     """
     token, campaign, me = require_member(request, cid)
     images, documents, skipped = [], [], []
 
     for f in files:
-        name = os.path.basename(f.filename or "")
+        # the browser sends the path within the chosen folder; the folder is what says
+        # which shelf a picture belongs on, so keep it rather than taking the basename
+        rel = (f.filename or "").replace("\\", "/")
+        name = os.path.basename(rel)
         if not name:
             continue
         lower = name.lower()
@@ -812,18 +820,19 @@ async def import_library(request: Request, cid: str,
                 continue
             documents.append((name, raw))
         elif (f.content_type or "").startswith("image/"):
-            images.append((name, await f.read(media.MAX_UPLOAD_BYTES + 1)))
+            images.append((rel, await f.read(media.MAX_UPLOAD_BYTES + 1)))
         else:
             skipped.append({"name": name, "why": "not an image or a document"})
 
     added_images = []
-    for name, raw in images:
+    for rel, raw in images:
+        kind = _kind_from_folder(rel)
         try:
-            processed = media.process(raw, "handout")
+            processed = media.process(raw, kind)
         except media.MediaError as e:
-            skipped.append({"name": name, "why": str(e)})
+            skipped.append({"name": os.path.basename(rel), "why": str(e)})
             continue
-        m = _store_image(cid, token, processed, "handout", _caption_from(name), "upload")
+        m = _store_image(cid, token, processed, kind, _caption_from(rel), "upload")
         added_images.append(_describe(m))
 
     # The cap is on what the campaign *holds*, not on what one upload carries. Counting
@@ -851,6 +860,29 @@ async def import_library(request: Request, cid: str,
         skipped.append({"name": name, "why": f"over the {MAX_LORE_DOCS}-document limit"})
 
     return {"images": added_images, "documents": added_docs, "skipped": skipped}
+
+
+# A folder of campaign art is already sorted - NPC/, Place/, Maps/ - so the shelf it
+# belongs on is sitting right there in the path. Only the folder is read, never the file
+# name, because "Kentuckai_Father.png" says who but not what kind of picture it is.
+FOLDER_KINDS = {
+    "npc": "npc", "npcs": "npc", "character": "npc", "characters": "npc",
+    "portrait": "npc", "portraits": "npc", "people": "npc", "cast": "npc",
+    "place": "scene", "places": "scene", "scene": "scene", "scenes": "scene",
+    "location": "scene", "locations": "scene", "background": "scene",
+    "backgrounds": "scene", "setting": "scene",
+    "map": "map", "maps": "map",
+}
+
+
+def _kind_from_folder(relative_path, default="handout"):
+    """The shelf a picture lands on, from the folder it arrived in."""
+    parts = relative_path.replace("\\", "/").split("/")[:-1]
+    for part in reversed(parts):                 # nearest folder wins
+        hit = FOLDER_KINDS.get(part.strip().lower())
+        if hit:
+            return hit
+    return default
 
 
 def _caption_from(filename):
@@ -988,6 +1020,25 @@ async def serve_media(request: Request, cid: str, mid: str):
 async def list_media(request: Request, cid: str):
     require_member(request, cid)
     return {"media": [_describe(m) for m in store.campaign_media(cid)]}
+
+
+@app.post("/api/campaigns/{cid}/media/{mid}")
+async def edit_media(request: Request, cid: str, mid: str, body: dict = Body(...)):
+    """Change a picture's description, or move it to another shelf."""
+    require_member(request, cid)
+    if not store.get_media(cid, mid):
+        raise HTTPException(404, "no such image")
+
+    kind = body.get("kind")
+    if kind is not None and kind not in GALLERY_KINDS:
+        raise HTTPException(400, "unknown category")
+
+    caption = body.get("caption")
+    if caption is not None:
+        caption = str(caption).strip()[:400]
+
+    m = store.update_media(cid, mid, caption=caption, kind=kind)
+    return _describe(m)
 
 
 @app.delete("/api/campaigns/{cid}/media/{mid}")
