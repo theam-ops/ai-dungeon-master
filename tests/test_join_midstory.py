@@ -10,7 +10,7 @@ whichever loop first waits on it, and in the real server there is only ever one.
 
 import asyncio
 
-from conftest import player, settle
+from .conftest import player, settle
 
 import server
 from game import store

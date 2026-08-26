@@ -7,7 +7,7 @@ backend was handed rather than on what the database holds.
 
 import asyncio
 
-from conftest import drain
+from .conftest import drain
 from fastapi.testclient import TestClient
 
 import server

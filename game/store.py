@@ -403,6 +403,22 @@ def append_event(cid, kind, payload):
 
 
 def events_since(cid, since=0, limit=500):
+    """Events after `since`, oldest first, capped at `limit`.
+
+    Two fixes converged on this function and pulled in opposite directions, so the
+    reasoning is worth keeping.
+
+    The bug both were chasing: a browser opening a 1,200-event campaign replayed the
+    first 500, set `lastSeq` to 500, and never asked for 501-1200 again. It sat looking
+    at session one's opening scene while the table talked past it, and no reconnect
+    healed it.
+
+    One fix returned the *newest* window instead, which un-strands the browser but
+    silently drops the middle of the story. The other left this capped and taught
+    `server.replay` to page until it is caught up. Paging wins because it fixes both
+    halves: the client ends on the true last seq *and* has everything in between. So
+    this stays a plain forward read, and callers that need the whole log page for it.
+    """
     rows = db().execute(
         "SELECT seq, kind, payload FROM events WHERE campaign_id=? AND seq>? "
         "ORDER BY seq LIMIT ?", (cid, since, limit)).fetchall()
@@ -476,12 +492,53 @@ def export_campaign(cid):
     }
 
 
+def _records(blob, key):
+    """One list of dicts out of an export, or a ValueError naming what was wrong.
+
+    An export is a file off someone's disk, so every shape here is attacker-shaped:
+    the wrong type in any of these slots used to raise AttributeError deep inside the
+    loop, which is not in the caller's `except` list and became an HTTP 500 with a
+    stack trace instead of "that file isn't a campaign export"."""
+    value = blob.get(key) or []
+    if not isinstance(value, list):
+        raise ValueError(f"{key!r} should be a list, not {type(value).__name__}")
+    for item in value:
+        if not isinstance(item, dict):
+            raise ValueError(f"{key!r} contains a {type(item).__name__}, "
+                             f"not a record")
+    return value
+
+
+def _text(value, default=""):
+    """A string for a TEXT column. Anything else in an export is not worth an
+    InterfaceError from sqlite three frames down."""
+    return value if isinstance(value, str) else default
+
+
+def _int(value, default=0):
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return default
+
+
 def import_campaign(blob):
+    if not isinstance(blob, dict):
+        raise ValueError("not an AI DM campaign export")
     if blob.get("format") != "ai-dm-campaign/1":
         raise ValueError("not an AI DM campaign export")
 
     conn = db()
-    meta = blob["campaign"]
+    meta = blob.get("campaign")
+    if not isinstance(meta, dict):
+        raise ValueError("that export has no campaign in it")
+    history = meta.get("history", [])
+    if not isinstance(history, list):
+        raise ValueError("that export's history is not a list of messages")
+    characters = _records(blob, "characters")
+    media_rows = _records(blob, "media")
+    events = _records(blob, "events")
+    lore_rows = _records(blob, "lore")
     cid, now = _uid(), time.time()
     code = meta.get("code")
     if not code or campaign_by_code(code):
@@ -492,21 +549,23 @@ def import_campaign(blob):
         " updated_at) VALUES (?,?,?,?,?,?,?,?)",
         (cid, code, meta.get("name", "Imported campaign"), meta.get("lang", "en"),
          meta.get("backend", ""),
-         json.dumps(meta.get("history", []), ensure_ascii=False), now, now))
+         json.dumps(history, ensure_ascii=False), now, now))
 
     # media first: characters reference their portrait by id
     id_map = {}
-    for m in blob.get("media", []):
+    for m in media_rows:
         new_id = _uid()
-        id_map[m["id"]] = new_id
+        id_map[m.get("id")] = new_id
         conn.execute(
             "INSERT INTO media (id, campaign_id, file, kind, mime, bytes, width, height,"
             " caption, source, owner, created_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
-            (new_id, cid, m["file"], m.get("kind", "handout"), m.get("mime", "image/png"),
-             m.get("bytes", 0), m.get("width", 0), m.get("height", 0),
-             m.get("caption", ""), m.get("source", "upload"), None, now))
+            (new_id, cid, _text(m.get("file")), _text(m.get("kind"), "handout"),
+             _text(m.get("mime"), "image/png"), _int(m.get("bytes")), _int(m.get("width")),
+             _int(m.get("height")), _text(m.get("caption")),
+             _text(m.get("source"), "upload"), None, now))
 
-    for ch in blob.get("characters", []):
+    for ch in characters:
+        ch = dict(ch)                     # never mutate the caller's blob
         token = ch.pop("_token", None)
         portrait = id_map.get(ch.pop("portrait", "") or "", "")
         # portrait and notes are columns, not part of the sheet blob - lift them out
@@ -516,7 +575,7 @@ def import_campaign(blob):
         if portrait:
             conn.execute("UPDATE characters SET portrait=? WHERE id=?", (portrait, chid))
 
-    for ev in blob.get("events", []):
+    for ev in events:
         payload = {k: v for k, v in ev.items() if k not in ("seq", "kind")}
         if payload.get("media") in id_map:          # image events point at a media row
             payload["media"] = id_map[payload["media"]]
@@ -524,9 +583,9 @@ def import_campaign(blob):
             "INSERT INTO events (campaign_id, kind, payload, created_at) VALUES (?,?,?,?)",
             (cid, ev.get("kind", "narration"), json.dumps(payload, ensure_ascii=False), now))
 
-    for doc in blob.get("lore", []):
+    for doc in lore_rows:
         name, text = doc.get("name"), doc.get("text")
-        if name and text:
+        if isinstance(name, str) and isinstance(text, str) and name and text:
             conn.execute("INSERT INTO lore (id, campaign_id, name, text, created_at)"
                          " VALUES (?,?,?,?,?)", (_uid(), cid, name, text, now))
 
