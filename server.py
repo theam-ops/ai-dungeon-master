@@ -16,6 +16,7 @@ Environment:
     DND_KEYS            optional - where pasted keys are stored (default .keys.json)
     DND_DB              optional - path to the SQLite file
     MAX_TURNS_PER_MIN   optional - per-campaign spend backstop (default 12)
+    DM_ART_EVERY_TURNS  optional - player turns between DM illustrations (default 6)
 
 At least one AI must be reachable: any key above, or a running Ollama.
 """
@@ -26,6 +27,7 @@ import json
 import os
 import re
 import secrets
+import sys
 import zipfile
 from collections import defaultdict
 from urllib.parse import quote
@@ -597,6 +599,15 @@ async def run_dm_turn(cid, actor, action, images=None):
                 if kind == "backend":
                     store.set_campaign_backend(cid, event["backend"])
                     continue
+                if kind == "draw":
+                    # The DM asked for an illustration. Generating one takes the better
+                    # part of a minute, and this loop is what feeds the narration to
+                    # every browser at the table - awaiting it here would freeze the
+                    # scene mid-sentence for everyone. It goes off on its own and lands
+                    # in the feed when it is ready, the way a player's upload does.
+                    asyncio.create_task(illustrate(cid, event["prompt"],
+                                                   event.get("caption", "")))
+                    continue
                 await publish(cid, kind, event)
                 if kind == "sheet":
                     # persist and push straight away so HP bars move as damage lands
@@ -841,6 +852,36 @@ async def generate_media(request: Request, cid: str, body: dict = Body(...)):
     m = _store_image(cid, token, processed, kind, prompt, "generated")
     await _announce_image(cid, m, me, kind, body.get("share", "1"))
     return _describe(m)
+
+
+async def illustrate(cid, prompt, caption):
+    """Draw what the DM asked for, away from the turn that asked for it.
+
+    Called as a bare task from `run_dm_turn`, so it outlives the turn and must never
+    raise: the narration has already gone out and the picture is a bonus on top of it.
+    No artist, a 429 from a free key, a refusal, a campaign already at its image limit -
+    all of them end the same way, with a line on the server's log and a table that
+    never knew a picture was coming. The rate-limit slot was already spent in
+    `dm.run_tool`, so a provider that fails does not get retried a moment later.
+    """
+    artist = providers.image_backend()
+    if artist is None:
+        return
+    try:
+        raw, _mime = await artist.draw(prompt)
+        processed = media.process(raw, "scene")
+        # "dm" rather than "generated": the feed says who reached for the pencil, and
+        # a picture nobody asked for should be labelled as such
+        m = _store_image(cid, None, processed, "scene", caption or prompt, "dm")
+    except (providers.ProviderExhausted, providers.ProviderFailed, media.MediaError,
+            HTTPException) as e:
+        print(f"the DM's illustration didn't happen: {e}", file=sys.stderr)
+        return
+    except Exception as e:                       # a background task, so nothing catches
+        print(f"the DM's illustration broke: {type(e).__name__}: {e}", file=sys.stderr)
+        return
+
+    await _announce_image(cid, m, {"name": "", "_id": None}, "scene", "1")
 
 
 async def _announce_image(cid, m, me, kind, share):

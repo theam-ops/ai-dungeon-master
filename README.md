@@ -406,6 +406,9 @@ paperclip beside the message box:
 - **From a link** — paste an image address and the server fetches it
 - **Draw it** — have an AI generate a portrait, or illustrate the current scene
 
+There is a fourth, which nobody has to ask for: with a drawing AI configured, the DM
+illustrates scenes on its own. See **The DM illustrating on its own** below.
+
 **Portraits** appear on your sheet and as a small face beside your name in the party bar.
 **Attachments** go into the feed for everyone at the table, and the DM sees them too —
 "here's the map I found, what do I make of it?" — on any provider that supports vision
@@ -419,6 +422,42 @@ in, it would be re-sent every single turn and quietly multiply the bill.
 > image models return HTTP 429 on a free key. The **Draw it** and **Illustrate this
 > scene** buttons say so plainly rather than failing silently. Everything else — upload,
 > links, portraits, vision — works on the free tier.
+
+### The DM illustrating on its own
+
+When an AI that can draw is configured, the DM gets a fourth tool, `draw_scene`, and
+will use it at moments worth a picture — the first sight of somewhere, a creature
+revealed, the end of a bad fight. Nobody has to press anything; the image arrives in
+the feed a little after the narration, labelled *The DM illustrates the scene*.
+
+Two things keep it from becoming expensive.
+
+**A limit in code, not in the prompt.** The DM is asked to be sparing, but asking is
+not a guarantee — a chatty model would illustrate every paragraph and bill you for it.
+So the campaign holds a single illustration slot which refills once every
+`DM_ART_EVERY_TURNS` player turns (default 6), claimed in SQLite before anything is
+drawn. When the slot is empty the tool answers *not now*, the DM carries on narrating,
+and the table never sees the refusal. A campaign's first picture is free — that's
+usually the opening scene, which has more reason to be drawn than anything after it.
+
+```bash
+setx DM_ART_EVERY_TURNS 12      # rarer
+setx DM_ART_EVERY_TURNS 999     # off in practice
+```
+
+Unset a drawing provider and the tool disappears entirely, which is the real off switch.
+
+**It never holds up the turn.** Generating an image takes the better part of a minute,
+and the turn loop is what streams narration to every browser at the table — waiting for
+a picture there would freeze the scene mid-sentence for everyone. The drawing goes off
+on its own and lands in the feed when it is ready, the way an upload does. Every way it
+can fail — no artist, a 429 on a free key, a model that returns text instead of a
+picture, a campaign already at its 60-image limit — leaves the turn exactly as it was,
+with a line on the server's log and a table that never knew a picture was coming.
+
+DM art is stored, capped, exported and imported like every other image: same
+`media/<campaign>/<sha256>.<ext>` file store, same `MEDIA_MAX_PER_CAMPAIGN`, same trip
+into the `.zip`.
 
 ### What happens to a file you upload
 
@@ -505,9 +544,13 @@ The DM has two tools that run on every campaign, and both execute locally:
   the sheet in code, named to a specific character. The result is fed back to the model,
   so it can't drift from your real HP. Level-ups roll a fresh hit die.
 
-A third, **`search_lore`**, appears only when a campaign has documents in its library —
-a tool with nothing behind it is worse than no tool, because the model reaches for it
-anyway. See **Bringing a campaign you already run** above.
+Two more appear only when there is something behind them — a tool with nothing behind
+it is worse than no tool, because the model reaches for it anyway:
+
+- **`search_lore`**, when a campaign has documents in its library. See **Bringing a
+  campaign you already run** above.
+- **`draw_scene`**, when an AI that can draw is configured. See **The DM illustrating
+  on its own** above.
 
 Everything that happens is appended to an event log with a sequence number, and the
 browser tracks the last one it saw. When your phone sleeps, changes networks, or you
@@ -557,6 +600,18 @@ a pre-written English sentence, so each browser renders them in its own language
   `available()` and a `stream()` that yields text deltas then one message in Anthropic
   block format, and add it to `_build()`. Campaign history is stored in that one format,
   so nothing else needs to know.
+
+## Tests
+
+```bash
+pip install -r requirements-dev.txt
+python -m pytest
+```
+
+Every backend in the suite is a stub — a DM that says exactly what the test scripted,
+an artist that hands back four pixels of PNG — so the tests need no API key, spend
+nothing, and give the same answer on a machine with keys and a machine without. They
+run against a throwaway database and media folder, never your `campaign.db`.
 
 ## Cost
 

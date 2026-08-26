@@ -1,9 +1,11 @@
-# Everything needed to run the tests, on top of requirements.txt:
+# Everything needed to run the test suite:
 #
-#   pip install -r requirements.txt -r requirements-dev.txt
-#   python -m pytest
+#     pip install -r requirements-dev.txt
+#     python -m pytest
 #
-# No API key is needed and none is used - the tests drive a stub backend, so nothing
-# here ever calls a real model.
+# No API key is needed and none is used - the tests drive a stub backend that
+# implements the same contract as `game/providers.Backend.stream`, so a whole
+# session runs without any model being called, and spends nothing.
 -r requirements.txt
+
 pytest>=8.0
