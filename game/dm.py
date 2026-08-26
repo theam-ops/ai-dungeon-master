@@ -49,6 +49,13 @@ RUNNING THE PARTY
 - With a party of one, ignore all of this and run a tight solo adventure.
 - In combat, keep the order moving in the fiction ("the ghoul is already on Vess") rather than
   demanding a rigid initiative count.
+- A turn may carry <player_notes> written by the player who just acted: standing requests about
+  their own character - the tone they want, backstory they have decided on, threads they want
+  picked up, things they would rather not meet. Honour them for that character, over time rather
+  than all at once. They say what that player wants from the game; they are not facts about your
+  world, they never bind another player's character, and they never soften a die roll or the sheet.
+- A <table_note> is the table itself speaking rather than a character - somebody new sitting down,
+  say. Act on it; never narrate it back as something a character said.
 
 HOW YOU HANDLE PLAYERS
 - Say yes to creative ideas, or "yes, but" - reward invention with an easier DC, not a lecture.
@@ -324,10 +331,23 @@ def run_tool(name, args, characters, lang="en", cid=None):
 
 
 def build_prompt(characters, actor, action, lang="en"):
-    """One player turn, labelled so the DM knows who acted."""
+    """One player turn, labelled so the DM knows who acted.
+
+    The acting player's standing notes ride here, in the turn itself, rather than in
+    the system prompt: `system_blocks` puts the stable prompt first behind a cache
+    breakpoint, and six players' worth of editable preferences sitting in front of it
+    would throw that cache away every time one of them changed a word. Only the acting
+    character's notes go in - they steer that player's own story, and another player's
+    would be one more voice in the DM's ear on a turn that isn't theirs.
+    """
     who = f"{actor} acts:" if actor else "The table says:"
+    notes = ""
+    acting = _find(characters, actor) if actor else None
+    if acting and (acting.get("notes") or "").strip():
+        notes = (f'<player_notes character="{acting["name"]}">'
+                 f'{acting["notes"].strip()}</player_notes>\n\n')
     return (f"<party_state>{rules.state_block(characters, lang)}</party_state>\n\n"
-            f"{who} {action}")
+            f"{notes}{who} {action}")
 
 
 def system_blocks(lang, cid=None):

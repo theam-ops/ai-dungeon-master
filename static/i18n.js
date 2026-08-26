@@ -76,6 +76,13 @@ const STRINGS = {
     offline: "Offline",
     no_answer: "The server isn't answering.",
 
+    notes: "Notes for the DM",
+    notes_hint: "Only you and the DM see this. It is sent with every turn you take, so keep it to what should always be true.",
+    notes_ph: "e.g. Vess has been afraid of fire since her village burned, and is looking for the brother who walked out on her. I would rather chase a mystery than fight a war — and please, no harm to animals.",
+    notes_save: "Save notes",
+    notes_saved: "Notes saved",
+    notes_count: "{0}/{1}",
+
     attach: "Attach an image",
     library: "Campaign library",
     ai_checking: "checking…",
@@ -226,6 +233,13 @@ const STRINGS = {
 
     offline: "ออฟไลน์",
     no_answer: "เซิร์ฟเวอร์ไม่ตอบสนอง",
+
+    notes: "บันทึกถึงผู้คุมเกม",
+    notes_hint: "มีแค่คุณกับผู้คุมเกมที่เห็นข้อความนี้ และจะถูกส่งไปทุกครั้งที่คุณลงมือ จึงควรเขียนเฉพาะสิ่งที่เป็นจริงตลอดทั้งเรื่อง",
+    notes_ph: "เช่น เวสกลัวไฟมาตั้งแต่หมู่บ้านถูกเผา และกำลังตามหาพี่ชายที่ทิ้งเธอไป อยากเล่นแนวไขปริศนามากกว่าบุกตะลุย และขอไม่ให้มีฉากทำร้ายสัตว์",
+    notes_save: "บันทึก",
+    notes_saved: "บันทึกแล้ว",
+    notes_count: "{0}/{1}",
 
     attach: "แนบรูปภาพ",
     library: "คลังแคมเปญ",

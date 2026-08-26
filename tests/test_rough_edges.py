@@ -22,13 +22,17 @@ from .harness import new_table, png_bytes, second_browser
 # FIXED: a long campaign replayed from the wrong end
 # --------------------------------------------------------------------------- #
 
-def test_a_long_campaign_replays_its_newest_events(app_client):
+def test_a_long_campaign_replays_up_to_the_current_scene(app_client):
     """Opening a campaign that has run for several sessions shows the current scene.
 
-    Before: `events_since(cid, 0)` returned the *oldest* 500. The browser set
-    `lastSeq` from that, landed on seq 500, and never asked for anything after it -
+    Before: `events_since(cid, 0)` capped at 500 and `replay` read it once. The browser
+    set `lastSeq` from that, landed on seq 500, and never asked for anything after it -
     so it sat looking at session one while the table talked past it, and no reconnect
     healed it.
+
+    This once asserted that only the newest 500 came back, which was one way to
+    un-strand the browser. `replay` pages instead, so the client lands on the true last
+    seq *and* keeps the middle of the story - see `store.events_since`.
     """
     client, stub = app_client
     table = new_table(client, stub)
@@ -36,9 +40,9 @@ def test_a_long_campaign_replays_its_newest_events(app_client):
         store.append_event(table.id, "player", {"character": "Vess", "text": f"turn {i}"})
 
     fresh = table.events(since=0)
-    assert len(fresh) == 500
-    assert fresh[-1]["seq"] == store.last_seq(table.id)      # the newest event is there
+    assert fresh[-1]["seq"] == store.last_seq(table.id)      # caught up, which is the point
     assert fresh[-1]["text"] == "turn 699"
+    assert len(store.events_since(table.id, 0)) == 500       # one read is still capped
 
     # and the client can now resume from where it landed without a hole
     assert table.events(since=fresh[-1]["seq"]) == []
@@ -52,8 +56,8 @@ def test_a_client_that_was_away_too_long_still_catches_up(app_client):
 
     away_since = 3
     caught_up = table.events(since=away_since)
-    assert len(caught_up) == 500
     assert caught_up[-1]["seq"] == store.last_seq(table.id)
+    assert caught_up[0]["seq"] == away_since + 1             # nothing skipped in between
 
 
 def test_export_still_carries_the_whole_event_log(app_client):

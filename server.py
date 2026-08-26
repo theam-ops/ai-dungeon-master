@@ -391,6 +391,16 @@ async def private_roll(request: Request, notation: str = Body("1d20", embed=True
 # campaigns
 # --------------------------------------------------------------------------- #
 
+def public_character(c):
+    """One character as the whole table may see it.
+
+    A player's standing notes are theirs: they steer the DM on that player's own turns
+    and nobody else needs them to draw an HP bar, so they never ride a payload that goes
+    to every browser at the table.
+    """
+    return {k: v for k, v in c.items() if not k.startswith("_") and k != "notes"}
+
+
 def _make_character(spec, lang="en"):
     try:
         return rules.new_character(
@@ -450,8 +460,7 @@ async def add_or_claim(request: Request, cid: str, body: dict = Body(...)):
         if not target:
             raise HTTPException(404, "no such character")
         store.claim_character(claim_id, token)
-        return {"ok": True, "character": {k: v for k, v in target.items()
-                                          if not k.startswith("_")}}
+        return {"ok": True, "character": public_character(target)}
 
     roster = store.party(cid)
     if len(roster) >= 6:
@@ -465,8 +474,24 @@ async def add_or_claim(request: Request, cid: str, body: dict = Body(...)):
         raise HTTPException(400, f"someone at this table is already called "
                                  f"{char['name']} - pick another name")
     store.add_character(cid, char, token)
+    await announce_arrival(cid, char["name"])
     await publish(cid, "join", {"character": char["name"]})
     return {"ok": True, "character": char}
+
+
+async def announce_arrival(cid, name):
+    """Tell the DM, not just the table, that somebody new is at it.
+
+    Under the turn lock: a turn in flight is holding the history list in memory and
+    saves it when it finishes, so writing outside the lock would be overwritten.
+    """
+    if not store.get_history(cid):
+        return          # the story hasn't started; `begin` introduces the whole party
+    async with locks[cid]:
+        store.note_in_history(cid, (
+            f"<table_note>{name} has just joined the party, mid-story. They are in the "
+            "party state from here on. Bring them into the scene in your next narration "
+            "- give them a reason to be here and a moment of their own.</table_note>"))
 
 
 @app.get("/api/campaigns/{cid}")
@@ -477,17 +502,46 @@ async def campaign_detail(request: Request, cid: str):
         "lang": campaign["lang"] or "en",
         "backend": campaign["backend"] or providers.default_id(),
         "you": me["name"],
-        "party": [{k: v for k, v in c.items() if not k.startswith("_")}
-                  for c in store.party(cid)],
+        "notes": me.get("notes", ""),        # your own standing notes, nobody else's
+        "notes_max": store.MAX_NOTES_CHARS,
+        "party": [public_character(c) for c in store.party(cid)],
         "last_seq": store.last_seq(cid),
         "started": bool(store.get_history(cid)),
     }
 
 
+@app.post("/api/campaigns/{cid}/notes")
+async def set_notes(request: Request, cid: str, body: dict = Body(...)):
+    """Standing details for your own character - tone, backstory, what to leave alone.
+
+    There is no character id in the request on purpose: `require_member` resolves the
+    character from this browser's own token, so a player can only ever write their own.
+    """
+    token, campaign, me = require_member(request, cid)
+    notes = store.set_character_notes(me["_id"], body.get("notes"))
+    return {"ok": True, "notes": notes, "notes_max": store.MAX_NOTES_CHARS}
+
+
+def replay(cid, since):
+    """Every event after `since`, oldest first.
+
+    Paged, because `events_since` caps one read: somebody joining a long campaign asks
+    for the story from event zero, and a single capped read would hand them the opening
+    scenes, stop, and then start streaming live events from far past where it stopped -
+    a silent hole in the middle of the story rather than a short one.
+    """
+    while True:
+        batch = store.events_since(cid, since)
+        if not batch:
+            return
+        yield from batch
+        since = batch[-1]["seq"]
+
+
 @app.get("/api/campaigns/{cid}/events")
 async def campaign_events(request: Request, cid: str, since: int = 0):
     require_member(request, cid)
-    return {"events": store.events_since(cid, since)}
+    return {"events": list(replay(cid, since))}
 
 
 @app.delete("/api/campaigns/{cid}")
@@ -511,8 +565,9 @@ async def stream(request: Request, cid: str, since: int = 0):
 
     async def gen():
         try:
-            # replay anything this client missed while it was away
-            for event in store.events_since(cid, since):
+            # replay anything this client missed while it was away - or, for somebody
+            # who just joined, the whole story so far
+            for event in replay(cid, since):
                 yield f"data: {json.dumps(event)}\n\n"
             yield f"data: {json.dumps({'kind': 'ready'})}\n\n"
 
@@ -534,8 +589,7 @@ async def stream(request: Request, cid: str, since: int = 0):
 
 
 def party_payload(cid):
-    return {"kind": "party", "party": [{k: v for k, v in c.items() if not k.startswith("_")}
-                                       for c in store.party(cid)]}
+    return {"kind": "party", "party": [public_character(c) for c in store.party(cid)]}
 
 
 def load_images(cid, media_ids):
