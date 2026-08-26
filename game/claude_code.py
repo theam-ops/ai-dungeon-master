@@ -80,6 +80,29 @@ def auth_status():
 # perfectly good way to run Claude Code - it just isn't what this backend is for.
 API_KEY_METHODS = ("api_key", "apikey", "bedrock", "vertex")
 
+# `claude auth status` answers "is there a session on disk", not "does it still work".
+# An expired refresh token reports loggedIn:true right up until a turn tries to use it
+# and gets a 401, so the only honest signal is a turn that actually failed that way.
+# Remembered here so the picker stops advertising the backend after the first one.
+AUTH_ERROR_MARKS = ("oauth", "401", "authenticat", "expired", "re-authenticate")
+_token_rejected = False
+
+
+def note_auth_failure(message):
+    """Called when a turn fails in a way only re-signing-in can fix."""
+    global _token_rejected
+    low = (message or "").lower()
+    if any(m in low for m in AUTH_ERROR_MARKS):
+        _token_rejected = True
+    return _token_rejected
+
+
+def clear_auth_failure():
+    """A fresh sign-in, or a turn that worked, means the session is good again."""
+    global _token_rejected
+    _token_rejected = False
+    ClaudeCodeBackend._auth_cache = (0.0, False)
+
 
 def is_subscription(state):
     """Signed in, and by a route a Pro/Max subscription actually pays for."""
@@ -139,6 +162,7 @@ class LoginFlow:
 
         await self.cancel()
         if auth_status()["logged_in"]:
+            clear_auth_failure()
             return True, ""
         tail = rest.decode("utf-8", errors="replace").strip().splitlines()
         return False, (tail[-1] if tail else "Claude Code did not accept that code")
@@ -199,10 +223,15 @@ class ClaudeCodeBackend(providers.Backend):
     def available(self):
         """Installed, signed in, and signed in *on a subscription*.
 
-        Two traps, both of which make this backend claim to be ready when it isn't:
+        Three traps, all of which make this backend claim to be ready when it isn't:
 
-        Expired token - a Claude Code whose OAuth has lapsed still looks installed, so
+        Not signed in - a Claude Code that was never signed in still looks installed, so
         this would advertise itself and then fail over on every single turn.
+
+        Expired token - worse, because `auth status` cannot see it: a lapsed session
+        still reports `loggedIn: true` with a real email and plan attached, and only a
+        turn discovers the 401. `note_auth_failure` records that, and this stops
+        advertising until someone signs in again.
 
         API-key auth - if ANTHROPIC_API_KEY is set in this server's environment, Claude
         Code reports `loggedIn: true` with `authMethod: api_key` and bills that key.
@@ -213,7 +242,7 @@ class ClaudeCodeBackend(providers.Backend):
         `auth status` shells out, so the answer is cached briefly - the AI picker asks
         this of every backend it lists.
         """
-        if not cli_path() or SDK_ERROR:
+        if not cli_path() or SDK_ERROR or _token_rejected:
             return False
         cls = ClaudeCodeBackend
         now = time.monotonic()
@@ -236,6 +265,9 @@ class ClaudeCodeBackend(providers.Backend):
             return False, "Claude Code is not installed on this machine"
         if not state["logged_in"]:
             return False, "Claude Code is installed but not signed in"
+        if _token_rejected:
+            return False, ("Claude Code's sign-in has expired - a turn came back 401. "
+                           "Sign in again to use it")
         if not is_subscription(state):
             return False, ("Claude Code is signed in with an API key, not a Claude "
                            "subscription - turns would be billed to that key. Unset "
@@ -342,10 +374,15 @@ class ClaudeCodeBackend(providers.Backend):
         # exhausted rather than failed: a subscription that has hit its limit is exactly
         # the exhausted case, and failover moves on to the next AI either way
         if failure:
+            # a 401 is not a rate limit - it will fail identically until someone
+            # signs in again, so stop offering this backend rather than failing
+            # over on every turn from here on
+            note_auth_failure(failure)
             raise providers.ProviderExhausted(f"Claude Code: {failure}")
         if not said_anything:
             raise providers.ProviderFailed("Claude Code: empty response")
 
+        clear_auth_failure()          # a turn went through, so the session is good
         history.append({"role": "assistant", "content": content})
         yield {"kind": "narration", "text": "\n\n".join(text_parts)}
 
