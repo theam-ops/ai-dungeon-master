@@ -9,3 +9,7 @@ saves/
 .keys.json
 media/
 .pytest_cache/
+
+# Scratch checkouts that background agents work in. Each is a full copy of the
+# repo with its own .git, so committing one would duplicate the whole project.
+.claude/worktrees/
