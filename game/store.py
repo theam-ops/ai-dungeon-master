@@ -11,6 +11,8 @@ import sqlite3
 import string
 import time
 
+from . import rules            # for the character-shape migration in party()
+
 DB_PATH = os.environ.get("DND_DB", os.path.join(os.path.dirname(os.path.dirname(
     os.path.abspath(__file__))), "campaign.db"))
 
@@ -293,6 +295,9 @@ def party(cid):
         ch["_token"] = r["player_token"]
         ch["portrait"] = r["portrait"] or ""
         ch["notes"] = r["notes"] or ""
+        # characters made before skills existed have no `skills` key at all; give them
+        # their class's, here rather than in a migration, since it lives in the blob
+        rules.ensure_skills(ch)
         out.append(ch)
     return out
 

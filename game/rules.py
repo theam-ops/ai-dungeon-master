@@ -28,6 +28,29 @@ CLASSES = {
 
 RACES = ["Human", "Elf", "Dwarf", "Halfling", "Half-Orc", "Tiefling", "Dragonborn", "Gnome"]
 
+# Every skill hangs off one ability. The DM used to be asked, in prose, to remember a
+# proficiency bonus and pick a modifier; now the numbers are here and it is told them.
+SKILLS = {
+    "Athletics": "STR",
+    "Acrobatics": "DEX", "Sleight of Hand": "DEX", "Stealth": "DEX",
+    "Arcana": "INT", "History": "INT", "Investigation": "INT",
+    "Nature": "INT", "Religion": "INT",
+    "Animal Handling": "WIS", "Insight": "WIS", "Medicine": "WIS",
+    "Perception": "WIS", "Survival": "WIS",
+    "Deception": "CHA", "Intimidation": "CHA", "Performance": "CHA", "Persuasion": "CHA",
+}
+
+# Three apiece, picked so a class reads as itself at a glance. This game does not model
+# choosing your skills at creation, and adding that would be a different feature.
+CLASS_SKILLS = {
+    "Fighter": ["Athletics", "Intimidation", "Survival"],
+    "Wizard":  ["Arcana", "History", "Investigation"],
+    "Rogue":   ["Stealth", "Sleight of Hand", "Perception"],
+    "Cleric":  ["Religion", "Insight", "Medicine"],
+    "Ranger":  ["Survival", "Nature", "Animal Handling"],
+    "Bard":    ["Persuasion", "Performance", "Deception"],
+}
+
 
 # --------------------------------------------------------------------------- #
 # dice
@@ -80,6 +103,32 @@ def modifier(score):
     return (score - 10) // 2
 
 
+def proficiency_bonus(level):
+    """+2 at levels 1-4, then a point every four levels."""
+    return 2 + max(0, (int(level) - 1)) // 4
+
+
+def skill_modifier(ch, skill):
+    """What this character adds to a roll of `skill`."""
+    ability = SKILLS.get(skill)
+    if ability is None:
+        raise ValueError(f"unknown skill: {skill}")
+    bonus = proficiency_bonus(ch["level"]) if skill in ch.get("skills", []) else 0
+    return modifier(ch["abilities"][ability]) + bonus
+
+
+def ensure_skills(ch):
+    """Give a character its class proficiencies if it predates skills existing.
+
+    Characters live as a JSON blob, so an older one simply has no `skills` key rather
+    than a null column. Filling it in on read costs nothing and is undone by deleting
+    the key again; the next save persists it. Never overwrites a list already there.
+    """
+    if not ch.get("skills"):
+        ch["skills"] = list(CLASS_SKILLS.get(ch.get("class"), []))
+    return ch
+
+
 def roll_ability():
     """4d6 drop lowest."""
     d = sorted(random.randint(1, 6) for _ in range(4))
@@ -118,6 +167,7 @@ def new_character(name, race, klass, scores=None, lang="en"):
         "gold": 25,
         "inventory": [i18n.gear(item, lang) for item in kit],
         "conditions": [],
+        "skills": list(CLASS_SKILLS[klass]),
     }
 
 
@@ -165,6 +215,10 @@ def state_block(characters, lang="en"):
             "hp": ch["hp"], "max_hp": ch["max_hp"], "ac": ch["ac"], "gold": ch["gold"],
             "abilities": ch["abilities"],
             "modifiers": {a: modifier(ch["abilities"][a]) for a in ABILITIES},
+            # the proficient skills and the bonus, not eighteen precomputed totals: this
+            # block is re-sent every single turn, and the DM can add two numbers
+            "proficiency_bonus": proficiency_bonus(ch["level"]),
+            "skills": ch.get("skills", []),
             "inventory": ch["inventory"], "conditions": ch["conditions"],
             "status": "UNCONSCIOUS AT 0 HP" if ch["hp"] == 0 else "conscious",
         })
