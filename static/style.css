@@ -328,11 +328,17 @@ button:disabled { opacity: .45; cursor: default; }
   min-width: 0; overflow: hidden;
 }
 .hud-roll {
-  flex: 0 0 auto; font-family: var(--mono); font-size: 11px;
+  flex: 0 1 auto; min-width: 0; display: flex; gap: 4px; align-items: baseline;
+  font-family: var(--mono); font-size: 11px;
   padding: 2px 7px; border-radius: 6px;
   border: 1px solid var(--edge); background: var(--ink-3); color: var(--muted);
   white-space: nowrap;
 }
+/* the reason gives way; the number never does */
+.hud-roll .hud-why {
+  min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.hud-roll b { flex: 0 0 auto; }
 .hud-roll b { color: var(--parchment); font-weight: 600; }
 .hud-roll.crit-success { border-color: var(--green); color: #d4f0c4; }
 .hud-roll.crit-fail { border-color: var(--red); color: #f0b8a4; }

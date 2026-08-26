@@ -1338,8 +1338,12 @@ function renderHud() {
   S.rolls.slice().reverse().forEach((r) => {
     const pill = el("div", "hud-roll" + (r.crit ? " crit-" + r.crit : ""));
     pill.title = r.reason || "";
-    pill.append(document.createTextNode((r.reason || t("roll")) + " "),
-                el("b", "", String(r.total)));
+    // The DM writes the reason for the feed, not for a pill: "Tamar: Athletics (STR)
+    // to haul the mule back onto the trail vs DC 15" is a normal one. Drop the name -
+    // this row is already yours - and let the rest truncate, so the total, which is the
+    // whole point of the pill, never gets squeezed off the end. Full text is the title.
+    const why = (r.reason || t("roll")).replace(/^[^:]{1,24}:\s*/, "");
+    pill.append(el("span", "hud-why", why), el("b", "", String(r.total)));
     rolls.append(pill);
   });
   body.append(rolls);
