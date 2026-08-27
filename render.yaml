@@ -2,18 +2,42 @@ services:
   - type: web
     name: ai-dungeon-master
     runtime: docker
-    plan: free
+    plan: starter          # free has no persistent disk; see the note at the bottom
     healthCheckPath: /healthz
+
+    # Campaigns, characters, uploaded art and imported notes all live on this disk.
+    # Without it the free plan wipes them on every redeploy and every idle spin-down.
+    disk:
+      name: data
+      mountPath: /data
+      sizeGB: 1
+
     envVars:
-      - key: ANTHROPIC_API_KEY
-        sync: false          # set this in the Render dashboard
+      # Where the data actually goes. Both must point at the mounted disk.
+      - key: DND_DB
+        value: /data/campaign.db
+      - key: DND_MEDIA
+        value: /data/media
+
+      # Set this, or anyone who finds the URL can play on your credit.
       - key: APP_PASSWORD
-        sync: false          # set this too, or anyone can spend your credits
+        sync: false
+
+      # One of these has to be set or the DM cannot narrate. A Gemini key is free
+      # (aistudio.google.com/apikey); an Anthropic key is billed per token.
+      # NOTE: the "Claude Pro/Max (this machine)" backend does NOT work here. It drives
+      # the Claude Code installed on the host, and there is none in a datacentre - a
+      # deployed copy needs a key.
+      - key: GEMINI_API_KEY
+        sync: false
+      - key: ANTHROPIC_API_KEY
+        sync: false
+
+      # Signs the cookie that says which character is yours. Generated once and kept,
+      # so a redeploy does not log the whole table out.
       - key: SESSION_SECRET
         generateValue: true
-      # The free plan has an ephemeral disk: campaign.db is wiped on redeploy.
-      # Use Export in the app to keep saves, or attach a persistent disk:
-      #   disk:
-      #     name: data
-      #     mountPath: /data
-      #   and set DND_DB=/data/campaign.db
+
+# Staying on the free plan? Delete the `disk:` block and the DND_DB / DND_MEDIA vars,
+# set `plan: free`, and treat it as disposable: use Export in the app to keep anything
+# you care about, because a redeploy will take the rest.

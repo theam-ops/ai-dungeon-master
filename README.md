@@ -73,13 +73,24 @@ Open **http://localhost:8000**, roll a character, and play.
 
 ## Playing from your phone
 
-**Option A — a tunnel (free, instant, no signup).** Your PC keeps running the server
-and gets a public https URL. Install [cloudflared](https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/downloads/),
-then with the server running:
+**Option A — a tunnel (free, instant, no signup, and Claude Pro still runs the table).**
+Your PC keeps running the game and gets a public https URL:
 
 ```bash
-cloudflared tunnel --url http://localhost:8000
+python launch.py --share --password "something-only-your-table-knows"
 ```
+
+That fetches `cloudflared` the first time (about 20MB, once, into `tools/bin/`), starts
+the game, and prints a link like `https://….trycloudflare.com`. Everyone who opens it
+gets the password screen first.
+
+It **refuses to share without a password** — a public link with none is an open bar tab
+on whatever is running the DM. The link dies when you close the window and is different
+next time; that is fine for "we're playing tonight" and is not an address you can put
+somewhere permanent, which is what Option B is for.
+
+This is the only route where **your Claude subscription keeps being the DM**, because the
+game is still running on your machine.
 
 It prints a `https://something.trycloudflare.com` URL. Open it on your phone. Set
 `APP_PASSWORD` first (see below) — that URL is on the public internet.
@@ -89,9 +100,21 @@ a `render.yaml`, so any container host works — Render, Railway, Fly.io, Koyeb.
 Render: push this folder to GitHub, create a Blueprint from `render.yaml`, and set
 `ANTHROPIC_API_KEY` and `APP_PASSWORD` in the dashboard.
 
-> **Free tiers wipe the disk on redeploy.** `campaign.db` is not permanent there. Use
-> **Export** in the app to download a campaign as JSON and **Import** to restore it, or
-> attach a persistent disk and set `DND_DB=/data/campaign.db` (commented into `render.yaml`).
+`render.yaml` is set up for this: a 1GB persistent disk at `/data`, with `DND_DB` and
+`DND_MEDIA` pointing into it so campaigns and uploaded art survive a redeploy. Set
+`APP_PASSWORD` and one AI key in the dashboard and it is ready.
+
+> **Claude Pro cannot come with it.** The "Claude Pro/Max (this machine)" backend drives
+> the Claude Code installed on the host, and there is none in a datacentre. A deployed
+> copy needs a key — a free Gemini key is the cheapest way to have one.
+
+> **On the free plan there is no persistent disk.** Delete the `disk:` block and the
+> `DND_DB` / `DND_MEDIA` variables, and treat the instance as disposable: a redeploy or
+> an idle spin-down takes the campaigns with it. **Export** what you care about.
+
+Running both is reasonable, and is what the two options are for: a deployed instance
+your table can reach any time, and the tunnel when you want Claude Pro to run a session.
+Campaigns move between them with **Export** and **Import**.
 
 ## Playing free, with no API key
 

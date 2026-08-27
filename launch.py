@@ -7,6 +7,7 @@ missing rather than dumping a traceback.
     python launch.py                 start, and open a browser
     python launch.py --no-browser    start, but don't open one
     python launch.py --port 9000     use a particular port
+    python launch.py --share         also put it on the public web, behind a password
 
 Close the window to stop the game.
 """
@@ -35,6 +36,18 @@ BANNER = r"""
 
 def say(msg):
     print(msg, flush=True)
+
+
+def pause():
+    """Hold the window open so an error is readable - but only when there is someone
+    to read it. Piped or redirected, stdin is at EOF and input() would raise."""
+    msg = "\n  Press Enter to close."
+    if not sys.stdin or not sys.stdin.isatty():
+        return
+    try:
+        input(msg)
+    except (EOFError, KeyboardInterrupt):
+        pass
 
 
 def missing_packages():
@@ -108,18 +121,26 @@ def main():
     parser.add_argument("--no-browser", action="store_true")
     parser.add_argument("--host", default="0.0.0.0",
                         help="0.0.0.0 lets other devices on your network join")
+    parser.add_argument("--share", action="store_true",
+                        help="open a public https link through a Cloudflare quick tunnel")
+    parser.add_argument("--password", default=os.environ.get("APP_PASSWORD", ""),
+                        help="gate the whole game behind one shared password")
     args = parser.parse_args()
+
+    # read by server.py at import, so it has to be set before uvicorn loads the app
+    if args.password:
+        os.environ["APP_PASSWORD"] = args.password
 
     os.chdir(HERE)
     say(BANNER)
 
     if missing_packages() and not install_requirements():
-        input("\nPress Enter to close.")
+        pause()
         return 1
     if missing_packages():
         say("Something is still missing after installing. Run it by hand to see why:\n"
             f"    {sys.executable} -m pip install -r requirements.txt")
-        input("\nPress Enter to close.")
+        pause()
         return 1
 
     port = free_port(args.port)
@@ -127,9 +148,26 @@ def main():
     if port != args.port:
         say(f"  Port {args.port} was busy, using {port} instead.")
     say(dm_status())
+    if args.password:
+        say("  Password:       set — everyone joining needs it")
     say(f"\n  Playing at:  {url}")
     say("  On your phone: see 'Playing from your phone' in README.md")
     say("\n  Close this window to stop the game.\n")
+
+    if args.share and not args.password:
+        # a public link with no password is an open bar tab on whatever runs the DM
+        say("  Refusing to share without a password. Add one:")
+        say('      python launch.py --share --password "something-only-your-table-knows"')
+        pause()
+        return 1
+
+    tunnel = None
+    if args.share:
+        say("  Opening a public link…")
+        from tools import share as share_tool
+        tunnel = share_tool.start(port, say=say)
+        if tunnel is None:
+            say("  Carrying on locally; the game still works at the address above.")
 
     if not args.no_browser:
         threading.Thread(target=open_when_ready, args=(url, port), daemon=True).start()
@@ -139,6 +177,10 @@ def main():
         uvicorn.run("server:app", host=args.host, port=port, log_level="warning")
     except KeyboardInterrupt:
         pass
+    finally:
+        # the tunnel outlives the server otherwise, leaving a public link to nothing
+        if tunnel and tunnel.poll() is None:
+            tunnel.terminate()
     say("\n  Stopped.")
     return 0
 
