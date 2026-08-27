@@ -157,30 +157,40 @@
   <nav class="gtabs viewtabs hidden" id="view-tabs"></nav>
 
   <div class="stage" id="stage">
-    <main id="feed" class="feed"></main>
-    <aside class="dash hidden" id="dash"><div class="dash-body" id="dash-body"></div></aside>
+    <!-- the story column: feed, and everything that must line up under it. The composer
+         lives in here, not beside the stage, or it centres on the whole window while the
+         feed centres on the column and the two drift apart by half the panel. -->
+    <div class="story" id="story">
+      <main id="feed" class="feed"></main>
+
+      <div id="thinking" class="thinking hidden">
+        <span></span><span></span><span></span><em data-i18n="thinking"></em>
+      </div>
+
+      <!-- live HUD: your vitals and the last rolls, always on while you play -->
+      <div id="hud" class="hud hidden">
+        <button class="hud-toggle" id="hud-toggle" type="button" data-i18n-title="hud_collapse">&#9662;</button>
+        <div class="hud-body" id="hud-body"></div>
+      </div>
+
+      <div class="attachments hidden" id="attachments"></div>
+
+      <form class="composer" id="composer">
+        <button class="icon attach" id="btn-attach" type="button" data-i18n-title="attach">&#128206;</button>
+        <input type="file" id="attach-file" accept="image/png,image/jpeg,image/webp,image/gif" hidden multiple>
+        <button class="icon attach" id="btn-attach-dir" type="button" data-i18n-title="attach_folder">&#128193;</button>
+        <input type="file" id="attach-dir" webkitdirectory directory hidden>
+        <textarea id="input" rows="1" data-i18n-ph="what_do" autocomplete="off"></textarea>
+        <button class="send" id="btn-send" type="submit" data-i18n-title="act">&#10148;</button>
+      </form>
+    </div>
+
+    <aside class="dash hidden" id="dash">
+      <button class="dash-toggle" id="dash-toggle" type="button" data-i18n-title="dash_hide">&#10095;</button>
+      <div class="dash-body" id="dash-body"></div>
+    </aside>
+    <button class="dash-show" id="dash-show" type="button" data-i18n-title="dash_show">&#10094;</button>
   </div>
-
-  <div id="thinking" class="thinking hidden">
-    <span></span><span></span><span></span><em data-i18n="thinking"></em>
-  </div>
-
-  <!-- live HUD: your vitals and the last rolls, always on while you play -->
-  <div id="hud" class="hud hidden">
-    <button class="hud-toggle" id="hud-toggle" type="button" data-i18n-title="hud_collapse">&#9662;</button>
-    <div class="hud-body" id="hud-body"></div>
-  </div>
-
-  <div class="attachments hidden" id="attachments"></div>
-
-  <form class="composer" id="composer">
-    <button class="icon attach" id="btn-attach" type="button" data-i18n-title="attach">&#128206;</button>
-    <input type="file" id="attach-file" accept="image/png,image/jpeg,image/webp,image/gif" hidden multiple>
-    <button class="icon attach" id="btn-attach-dir" type="button" data-i18n-title="attach_folder">&#128193;</button>
-    <input type="file" id="attach-dir" webkitdirectory directory hidden>
-    <textarea id="input" rows="1" data-i18n-ph="what_do" autocomplete="off"></textarea>
-    <button class="send" id="btn-send" type="submit" data-i18n-title="act">&#10148;</button>
-  </form>
 
   <!-- character sheet drawer -->
   <div class="scrim hidden" id="scrim"></div>

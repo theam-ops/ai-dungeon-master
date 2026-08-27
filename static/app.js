@@ -1625,10 +1625,18 @@ function cardVitals(c) {
     });
   box.append(vitals);
 
-  const inv = el("p", "sheet-list");
-  inv.append(el("b", "", t("carrying")));
-  inv.append(document.createTextNode(c.inventory.join(", ") || t("nothing")));
-  box.append(inv);
+  return box;
+}
+
+function cardItems(c) {
+  const box = card("carrying", "scroll");
+  const list = el("div", "item-list");
+  if (!c.inventory.length) {
+    box.append(el("p", "hint", t("nothing")));
+    return box;
+  }
+  c.inventory.forEach((i) => list.append(el("span", "item", i)));
+  box.append(list);
   return box;
 }
 
@@ -1731,8 +1739,10 @@ function cardRolls() {
 }
 
 /* Which shell, and what goes in it. */
-const VIEWS = ["story", "sheet", "skills", "party"];
-const VIEW_ICONS = { story: "story", sheet: "scroll", skills: "skill", party: "party" };
+/* Status, items and skills are what you check mid-scene, so they share one page.
+   Abilities and the roll log are reference, and go behind their own tab. */
+const VIEWS = ["story", "character", "detail", "party"];
+const VIEW_ICONS = { story: "story", character: "scroll", detail: "skill", party: "party" };
 
 /* Not persisted, deliberately. The HUD's collapsed state is remembered because it is a
    strip; a remembered view tab means closing the app on "Skills" and reopening it to no
@@ -1749,13 +1759,13 @@ function renderDash() {
   if (c) {
     if (wide) {
       // all of it at once; the topbar strip already carries the party on a wide screen
-      [cardVitals(c), cardAbilities(c), cardConditions(c), cardRolls(), cardSkills(c)]
+      [cardVitals(c), cardConditions(c), cardItems(c), cardSkills(c),
+       cardAbilities(c), cardRolls()].forEach((n) => n && box.append(n));
+    } else if (view === "character") {
+      [cardVitals(c), cardConditions(c), cardItems(c), cardSkills(c)]
         .forEach((n) => n && box.append(n));
-    } else if (view === "sheet") {
-      [cardVitals(c), cardAbilities(c), cardConditions(c), cardRolls()]
-        .forEach((n) => n && box.append(n));
-    } else if (view === "skills") {
-      box.append(cardSkills(c));
+    } else if (view === "detail") {
+      [cardAbilities(c), cardRolls()].forEach((n) => n && box.append(n));
     } else if (view === "party") {
       box.append(cardParty());
     }
@@ -1808,6 +1818,17 @@ function onViewportChange() {
 }
 DESKTOP.addEventListener("change", onViewportChange);
 window.addEventListener("resize", onViewportChange);
+
+/* Putting the panel away. Only meaningful on a wide screen - on a phone the tabs
+   already decide what is showing - so the buttons are CSS-hidden below the breakpoint
+   rather than conditionally built. Remembered, like the HUD's own collapsed state. */
+function showDash(on) {
+  $("screen-game").classList.toggle("dash-off", !on);
+  localStorage.setItem("dash", on ? "1" : "0");
+}
+$("dash-toggle").onclick = () => showDash(false);
+$("dash-show").onclick = () => showDash(true);
+showDash(localStorage.getItem("dash") !== "0");
 
 /* What is left in the drawer once the sheet moved to the dashboard: your own things,
    the campaign's art, and the table's settings. Remembered between opens - unlike the

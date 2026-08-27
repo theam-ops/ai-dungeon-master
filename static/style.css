@@ -230,7 +230,44 @@ button:disabled { opacity: .45; cursor: default; }
 /* stage: the feed, and on a wide screen the dashboard beside it.
    `min-height: 0` on both is load-bearing - without it a nested flex child's
    overflow-y:auto stops scrolling and the page grows instead. */
-.stage { flex: 1 1 auto; min-height: 0; display: flex; justify-content: center; }
+.stage { flex: 1 1 auto; min-height: 0; display: flex; justify-content: center;
+         position: relative; }
+
+/* the story column owns the feed AND everything under it, so they share one centre */
+.story { flex: 1 1 auto; min-width: 0; min-height: 0; display: flex; flex-direction: column; }
+
+/* Below the breakpoint there is no side-by-side: the panel takes the feed's place and
+   the composer stays full width underneath it. `display: contents` dissolves the story
+   column so its children join the stage's own stack - otherwise the panel and the
+   composer share a row and the composer is squeezed into a strip beside it. */
+@media (max-width: 1023px) {
+  .stage { flex-direction: column; }
+  .story { display: contents; }
+  .dash { order: -1; }
+}
+
+/* thin scrollbars: a 16px platform bar eats a twentieth of a 320px panel */
+.feed, .dash, .drawer, .gallery, .skill-list { scrollbar-width: thin; }
+.feed, .dash, .drawer { scrollbar-color: var(--edge) transparent; }
+.feed::-webkit-scrollbar, .dash::-webkit-scrollbar, .drawer::-webkit-scrollbar { width: 8px; }
+.feed::-webkit-scrollbar-track, .dash::-webkit-scrollbar-track,
+.drawer::-webkit-scrollbar-track { background: transparent; }
+.feed::-webkit-scrollbar-thumb, .dash::-webkit-scrollbar-thumb,
+.drawer::-webkit-scrollbar-thumb {
+  background: var(--edge); border-radius: 4px;
+}
+.feed::-webkit-scrollbar-thumb:hover, .dash::-webkit-scrollbar-thumb:hover,
+.drawer::-webkit-scrollbar-thumb:hover { background: var(--gold-dim); }
+
+/* collapsing the panel - only ever offered where the panel exists */
+.dash-toggle, .dash-show { display: none; }
+.dash-show {
+  position: absolute; top: 8px; right: 0; z-index: 4;
+  background: var(--ink-2); border: 1px solid var(--edge); border-right: 0;
+  border-radius: 8px 0 0 8px; color: var(--muted);
+  padding: 9px 7px; font-size: 12px; line-height: 1;
+}
+.dash-show:hover { color: var(--gold); }
 
 .viewtabs {
   flex: 0 0 auto; padding: 7px 12px;
@@ -258,6 +295,19 @@ button:disabled { opacity: .45; cursor: default; }
   }
   .dash-body { padding: 16px 14px calc(16px + var(--safe-b)); }
   .hud { display: none; }          /* the panel says all of it, and more */
+
+  .dash { position: relative; }
+  .dash-toggle {
+    display: block; position: absolute; top: 10px; right: 10px; z-index: 2;
+    background: none; border: 0; color: var(--muted); font-size: 12px;
+    padding: 4px 6px; line-height: 1;
+  }
+  .dash-toggle:hover { color: var(--gold); }
+  .dash-body { padding-top: 4px; }
+  /* with the panel put away the story gets the whole window, and a tab to bring it back */
+  #screen-game.dash-off .dash { display: none; }
+  #screen-game.dash-off .dash-show { display: block; }
+  #screen-game.dash-off .hud { display: block; }
 }
 
 /* dashboard cards */
@@ -318,6 +368,12 @@ button:disabled { opacity: .45; cursor: default; }
 .ab-CHA { color: var(--gold); }
 
 .cond-chips { display: flex; flex-wrap: wrap; gap: 5px; }
+
+.item-list { display: flex; flex-wrap: wrap; gap: 5px; }
+.item {
+  font-size: 12px; padding: 3px 8px; border-radius: 6px;
+  background: var(--ink-3); border: 1px solid var(--edge); color: var(--parchment);
+}
 
 .party-list { display: flex; flex-direction: column; gap: 8px; }
 .party-row { display: flex; align-items: center; gap: 9px; }
