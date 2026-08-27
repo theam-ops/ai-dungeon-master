@@ -16,3 +16,7 @@ media/
 
 # the tunnel binary, fetched on demand by `launch.py --share`
 tools/bin/
+
+# the deployed box's password and session key, written by tools/oracle-setup.sh
+.env
+.venv/

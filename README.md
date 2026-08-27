@@ -110,6 +110,19 @@ disk — if you later want the data to survive.
 > you want to keep; the `.zip` carries the images and documents with it. The first visit
 > after a sleep also takes most of a minute to answer.
 
+**Option C — an Oracle Always Free VM.** The only genuinely free host with a disk that
+survives, and the only one big enough to run Claude Code — so a Pro subscription can keep
+being the DM on a machine that is always on, which no other hosted option can offer.
+`tools/oracle-setup.sh` installs the game, Claude Code and cloudflared on a fresh Ubuntu
+ARM box and registers a systemd service. Copy the repo to the VM first (it is private, so
+the box cannot clone it), then run the script and follow the two steps it prints.
+
+> **Oracle reclaims instances that look idle** — under 20% CPU, network *and* memory at
+> the 95th percentile over 7 days. A game server used a few evenings a week is squarely
+> inside that. Upgrading the account to Pay As You Go exempts it and keeps Always Free
+> resources free; that is the fix, and it is worth doing before you move a campaign there.
+> Capacity for the ARM shapes is also frequently refused at signup — expect to retry.
+
 > **Not Vercel, Netlify, or any serverless host.** They give a function a read-only
 > filesystem and an ephemeral `/tmp`, and spread traffic across instances that share no
 > storage — so `campaign.db` cannot persist, uploaded art cannot persist, and the live
