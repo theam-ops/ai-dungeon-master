@@ -63,6 +63,9 @@ const STRINGS = {
 
     level_line: "Level {0} {1} {2}",
     hp: "HP", ac: "AC", xp: "XP", gp: "GP",
+    drawer_you: "You",
+    drawer_art: "Art",
+    drawer_table: "Table",
     view_story: "Story",
     view_sheet: "Sheet",
     view_skills: "Skills",
@@ -246,6 +249,9 @@ const STRINGS = {
 
     level_line: "เลเวล {0} {1}{2}",
     hp: "พลัง", ac: "เกราะ", xp: "EXP", gp: "ทอง",
+    drawer_you: "ตัวคุณ",
+    drawer_art: "ภาพ",
+    drawer_table: "โต๊ะ",
     view_story: "เรื่องราว",
     view_sheet: "ใบตัวละคร",
     view_skills: "ทักษะ",

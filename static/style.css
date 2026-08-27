@@ -238,7 +238,8 @@ button:disabled { opacity: .45; cursor: default; }
   overflow-x: auto; scrollbar-width: none;
 }
 .viewtabs::-webkit-scrollbar { display: none; }
-.viewtabs .gtab { display: flex; align-items: center; gap: 6px; padding: 8px 14px; font-size: 13px; }
+.drawer-tabs { display: flex; gap: 6px; margin: 2px 0 6px; }
+.drawer-tabs .gtab, .viewtabs .gtab { display: flex; align-items: center; gap: 6px; padding: 8px 14px; font-size: 13px; }
 
 .dash { min-height: 0; overflow-y: auto; flex: 1 1 auto; }
 .dash-body {

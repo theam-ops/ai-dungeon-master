@@ -495,7 +495,9 @@ renamed export still imports.
 | A picture's caption | Tap it to write a real description, or move it to another shelf |
 | Portrait / Scene art | In the sheet drawer: upload, link, or generate |
 | Notes for the DM | In the sheet drawer: standing details about your own character |
-| ★ (top right) | Character sheet, private dice, share code, export |
+| Dashboard | Your sheet beside the story on a wide screen; tabs below the topbar on a phone |
+| Story / Sheet / Skills / Party | The play tabs, on a narrow screen only |
+| ★ (top right) | The drawer: You, Art, Table |
 | ☰ (top left) | Back to the lobby |
 | × (beside a campaign in the lobby) | Delete it — asks first, and there is no undo |
 | Party bar | Everyone's HP, live — red border means down at 0 |
@@ -547,6 +549,10 @@ The DM has two tools that run on every campaign, and both execute locally:
 - **`roll_dice`** — the model never states a result it didn't roll. It sets the DC out
   loud first, then the number comes from Python's RNG, so it can't quietly decide you
   succeeded. Every roll shows in the feed: `Vess: Stealth vs DC 14 · 1d20+3 → [7]+3 = 10`.
+- **`roll_dice` with real skills** — each character carries their proficiencies, and the
+  party state hands the DM the worked-out total for every skill they are proficient in.
+  It used to be asked, in prose, to remember "+2 proficiency at level 1-4" and pick a
+  modifier itself, which made every check plausible rather than correct.
 - **`update_character`** — all damage, healing, XP, gold, items and conditions go through
   the sheet in code, named to a specific character. The result is fed back to the model,
   so it can't drift from your real HP. Level-ups roll a fresh hit die.

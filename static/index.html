@@ -186,17 +186,10 @@
   <div class="scrim hidden" id="scrim"></div>
   <aside class="drawer hidden" id="drawer">
     <div class="drawer-handle"></div>
+    <div class="gtabs drawer-tabs" id="drawer-tabs"></div>
     <div class="drawer-tools">
-      <div class="row">
-        <input id="private-roll" placeholder="1d20+3" spellcheck="false">
-        <button class="ghost" id="btn-private-roll" data-i18n="roll_privately"></button>
-      </div>
-      <p class="hint" id="private-result"></p>
-      <div class="row">
-        <button class="ghost" id="btn-share" data-i18n="share_code"></button>
-        <button class="ghost" id="btn-export" data-i18n="export"></button>
-      </div>
 
+      <div class="dtab-page" data-tab="you">
       <!-- standing notes for the DM: yours only, and only ever your own character's -->
       <h3 class="section-label" data-i18n="notes"></h3>
       <textarea id="notes" rows="4" data-i18n-ph="notes_ph" spellcheck="true"></textarea>
@@ -219,6 +212,9 @@
       <input type="file" id="portrait-file" accept="image/png,image/jpeg,image/webp,image/gif" hidden>
       <p class="hint" id="portrait-note"></p>
 
+      </div><!-- /you -->
+
+      <div class="dtab-page hidden" data-tab="art">
       <h3 class="section-label" data-i18n="scene_art"></h3>
       <button class="ghost" id="btn-illustrate" data-i18n="illustrate"></button>
       <p class="hint" id="illustrate-note"></p>
@@ -233,6 +229,19 @@
       <div class="gtabs" id="gallery-tabs"></div>
       <p class="hint" id="gallery-note"></p>
       <div id="gallery" class="gallery"></div>
+
+      </div><!-- /art -->
+
+      <div class="dtab-page hidden" data-tab="table">
+      <div class="row">
+        <input id="private-roll" placeholder="1d20+3" spellcheck="false">
+        <button class="ghost" id="btn-private-roll" data-i18n="roll_privately"></button>
+      </div>
+      <p class="hint" id="private-result"></p>
+      <div class="row">
+        <button class="ghost" id="btn-share" data-i18n="share_code"></button>
+        <button class="ghost" id="btn-export" data-i18n="export"></button>
+      </div>
 
       <h3 class="section-label" data-i18n="which_ai"></h3>
       <button class="ai-button" id="btn-ai">
@@ -260,6 +269,7 @@
       <p class="hint" id="ai-note"></p>
 
       <div class="langbar" id="lang-game"></div>
+      </div><!-- /table -->
     </div>
   </aside>
 </section>

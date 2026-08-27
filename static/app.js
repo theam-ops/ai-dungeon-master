@@ -1809,10 +1809,35 @@ function onViewportChange() {
 DESKTOP.addEventListener("change", onViewportChange);
 window.addEventListener("resize", onViewportChange);
 
+/* What is left in the drawer once the sheet moved to the dashboard: your own things,
+   the campaign's art, and the table's settings. Remembered between opens - unlike the
+   play tabs, the drawer is modal and you always chose to open it. */
+const DRAWER_TABS = ["you", "art", "table"];
+const DRAWER_ICONS = { you: "scroll", art: "art", table: "gear" };
+let drawerTab = localStorage.getItem("dtab") || "you";
+if (!DRAWER_TABS.includes(drawerTab)) drawerTab = "you";
+
+function showDrawerTab(name) {
+  drawerTab = name;
+  localStorage.setItem("dtab", name);
+  document.querySelectorAll(".dtab-page")
+    .forEach((p) => p.classList.toggle("hidden", p.dataset.tab !== name));
+  const bar = $("drawer-tabs");
+  bar.innerHTML = "";
+  DRAWER_TABS.forEach((key) => {
+    const b = el("button", "gtab" + (key === name ? " on" : ""));
+    b.type = "button";
+    b.append(icon(DRAWER_ICONS[key]), el("span", "", t("drawer_" + key)));
+    b.onclick = () => showDrawerTab(key);
+    bar.append(b);
+  });
+}
+
 function openDrawer(open) {
   $("drawer").classList.toggle("hidden", !open);
   $("scrim").classList.toggle("hidden", !open);
-  if (open) { renderAI(); renderPortrait(); renderLore(); renderGallery(); fillNotes();
+  if (open) { showDrawerTab(drawerTab);
+              renderAI(); renderPortrait(); renderLore(); renderGallery(); fillNotes();
               $("library-note").textContent = t("library_hint"); }
   else $("ai-list").classList.add("hidden");
 }
