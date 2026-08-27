@@ -1663,9 +1663,12 @@ function cardSkills(c) {
   box.append(el("p", "hint", t("proficiency_is", signed(proficiencyBonus(c.level)))));
 
   const list = el("div", "skill-list");
+  // yours first. Eighteen rows in alphabetical order buries the three you are actually
+  // trained in, which is the only part of this list you go looking for mid-scene.
   Object.keys(SKILL_ABILITY)
-    .sort((a, b) => tSkill(a).localeCompare(tSkill(b)))
-    .forEach((skill) => {
+    .sort((a, b) => (prof.has(b) - prof.has(a)) || tSkill(a).localeCompare(tSkill(b)))
+    .forEach((skill, i) => {
+      if (i === prof.size && prof.size) list.append(el("div", "skill-split"));
       const ability = SKILL_ABILITY[skill];
       const row = el("div", "skill-row" + (prof.has(skill) ? " prof" : ""));
       const name = el("div", "name");

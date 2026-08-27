@@ -352,8 +352,17 @@ button:disabled { opacity: .45; cursor: default; }
 .skill-row .name { display: flex; align-items: center; gap: 7px; flex: 1 1 auto; min-width: 0; }
 .skill-row .name span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .skill-row .num { font-family: var(--mono); font-size: 13px; flex: 0 0 auto; }
-.skill-row.prof { color: var(--parchment); }
-.skill-row.prof .num { color: var(--gold); }
+/* the ones you are trained in: brighter, gold, and lifted onto their own ground so the
+   block of them reads as a group rather than as rows that happen to be highlighted */
+.skill-row.prof {
+  color: var(--parchment);
+  background: rgba(201,162,39,.07);
+  border-bottom-color: rgba(201,162,39,.18);
+}
+.skill-row.prof .name { padding-left: 4px; }
+.skill-row.prof .num { color: var(--gold); font-weight: 600; }
+/* a gap, not a line: the list is already ruled, and a rule here would read as a heading */
+.skill-split { height: 9px; }
 .prof-dot {
   width: 5px; height: 5px; border-radius: 50%; background: var(--gold);
   flex: 0 0 auto;
