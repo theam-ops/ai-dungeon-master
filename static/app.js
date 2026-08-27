@@ -114,6 +114,8 @@ async function refreshUI() {
     renderChips();
   }
   if (S.pending) renderPick(S.pending);
+  // the steps are built in JS, so applyI18n above does not reach them
+  if (!$("guide").classList.contains("hidden")) renderGuide();
   if (S.campaign) {
     renderLive();
     // the count only — re-filling the box would throw away notes being typed right now
@@ -150,19 +152,29 @@ async function boot() {
   if (!me.dm_ready) { renderGetKeyLinks(); renderKeyForm("key-form"); }
   renderLobby(me.campaigns);
 
+  // Whether to explain the game, decided before the branching below: the person who
+  // most needs it is the friend opening a ?c= link, and they never see the lobby.
+  const firstVisit = !localStorage.getItem("guide_seen");
+
   // deep link: ?c=CODE or a campaign we were mid-game in
   const codeParam = new URLSearchParams(location.search).get("c");
   const resume = localStorage.getItem("campaign_id");
   if (codeParam) {
     $("join-code").value = codeParam.toUpperCase();
     history.replaceState({}, "", location.pathname);
-    return joinByCode();
+    await joinByCode();
+    if (firstVisit) openGuide(true);
+    return;
   }
   if (resume) {
-    try { return await enterCampaign(resume); }
-    catch (_) { localStorage.removeItem("campaign_id"); }
+    try {
+      await enterCampaign(resume);
+      if (firstVisit) openGuide(true);
+      return;
+    } catch (_) { localStorage.removeItem("campaign_id"); }
   }
   show("lobby");
+  if (firstVisit) openGuide(true);
 }
 
 function renderLobby(campaigns) {
@@ -714,6 +726,47 @@ $("btn-notes-save").onclick = async () => {
     btn.disabled = false;
   }
 };
+
+/* ── the first-run guide ────────────────────────────────────────────────
+   Four things a new player needs and cannot guess: that the dice are real, that one
+   person hosts and the rest just open a link, where the character lives, and that the
+   DM has to be told what it is. Opens once by itself; the button reopens it. */
+
+const GUIDE_STEPS = [
+  ["dice",   "guide_dice"],
+  ["party",  "guide_together"],
+  ["scroll", "guide_sheet"],
+  ["gear",   "guide_dm"],
+];
+
+function renderGuide() {
+  const box = $("guide-steps");
+  box.innerHTML = "";
+  GUIDE_STEPS.forEach(([ic, key]) => {
+    const row = el("div", "guide-step");
+    const badge = el("div", "guide-ic");   // the box is the wrapper's, not the svg's
+    badge.append(icon(ic));
+    row.append(badge);
+    const body = el("div");
+    body.append(el("div", "guide-h", t(key + "_h")));
+    body.append(el("div", "guide-p", t(key + "_p")));
+    row.append(body);
+    box.append(row);
+  });
+}
+
+function openGuide(on) {
+  if (on) renderGuide();
+  $("guide").classList.toggle("hidden", !on);
+  $("guide-scrim").classList.toggle("hidden", !on);
+  if (!on) localStorage.setItem("guide_seen", "1");
+  else $("guide-close").focus();
+}
+
+$("btn-guide").onclick = () => openGuide(true);
+$("guide-close").onclick = () => openGuide(false);
+$("guide-go").onclick = () => openGuide(false);
+$("guide-scrim").onclick = () => openGuide(false);
 
 /* ── gallery: every picture this campaign holds ─────────────────────── */
 
@@ -1887,6 +1940,10 @@ document.addEventListener("keydown", (e) => {
   if (e.key !== "Escape") return;
   if (!$("lightbox").classList.contains("hidden")) {
     $("lightbox").classList.add("hidden");
+    return;
+  }
+  if (!$("guide").classList.contains("hidden")) {
+    openGuide(false);
     return;
   }
   openDrawer(false);

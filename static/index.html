@@ -61,6 +61,8 @@
   <div class="panel">
     <h1 class="title" data-i18n="app_title">AI Dungeon Master</h1>
     <p class="sub" data-i18n="tagline"></p>
+    <button class="ghost tiny guide-open" id="btn-guide" type="button"
+            data-i18n="guide_open"></button>
 
     <div id="dm-warning" class="warning hidden">
       <span data-i18n="no_key"></span>
@@ -283,6 +285,18 @@
     </div>
   </aside>
 </section>
+
+<!-- first-run guide. Opens by itself the first time, and from the button after that. -->
+<div class="scrim hidden" id="guide-scrim"></div>
+<aside class="guide hidden" id="guide" role="dialog" aria-modal="true"
+       aria-labelledby="guide-title">
+  <button class="guide-x" id="guide-close" type="button" data-i18n-title="close">&#10005;</button>
+  <h2 class="guide-title" id="guide-title" data-i18n="guide_title"></h2>
+  <p class="guide-lede" data-i18n="guide_lede"></p>
+  <div class="guide-steps" id="guide-steps"></div>
+  <p class="hint" data-i18n="guide_footer"></p>
+  <button class="primary" id="guide-go" data-i18n="guide_go"></button>
+</aside>
 
 <div class="lightbox hidden" id="lightbox">
   <img id="lightbox-img" alt="">

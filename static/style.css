@@ -677,6 +677,68 @@ button:disabled { opacity: .45; cursor: default; }
 }
 .cond { color: var(--red); }
 
+/* ── first-run guide ────────────────────────────────────── */
+
+/* the one modal in the app that is centred rather than a bottom sheet: it is read once,
+   before there is any game to keep in view behind it. */
+.guide {
+  position: fixed; z-index: 22;
+  left: 50%; top: 50%; transform: translate(-50%, -50%);
+  width: min(520px, calc(100vw - 28px));
+  max-height: min(86dvh, 760px);
+  background: var(--ink-2); border: 1px solid var(--edge); border-radius: 16px;
+  padding: 24px 24px calc(20px + var(--safe-b));
+  box-shadow: 0 24px 70px rgba(0,0,0,.65);
+  animation: guide-in .22s ease both;
+  /* only the steps scroll, so the heading and the button that dismisses this stay on
+     screen - on a 375px phone in Thai the four steps are taller than the card */
+  display: flex; flex-direction: column; overflow: hidden;
+}
+@keyframes guide-in {
+  from { opacity: 0; transform: translate(-50%, calc(-50% + 8px)); }
+  to   { opacity: 1; transform: translate(-50%, -50%); }
+}
+.guide-x {
+  position: absolute; top: 10px; right: 12px;
+  background: none; border: 0; color: var(--muted);
+  font-size: 18px; line-height: 1; padding: 6px 8px; cursor: pointer;
+}
+.guide-x:hover { color: var(--gold); }
+
+.guide-title {
+  font-family: var(--display); font-size: 23px; color: var(--gold);
+  margin: 0 28px 6px 0; text-wrap: balance;
+}
+.guide-lede { color: var(--muted); font-size: 14px; margin: 0 0 17px; }
+
+.guide-steps {
+  display: flex; flex-direction: column; gap: 14px; margin-bottom: 17px;
+  flex: 1 1 auto; min-height: 0; overflow-y: auto;
+  scrollbar-width: thin; scrollbar-color: var(--edge) transparent;
+}
+.guide-steps::-webkit-scrollbar { width: 8px; }
+.guide-steps::-webkit-scrollbar-track { background: transparent; }
+.guide-steps::-webkit-scrollbar-thumb { background: var(--edge); border-radius: 4px; }
+.guide-step { display: flex; gap: 13px; align-items: flex-start; }
+.guide-ic {
+  flex: 0 0 auto; width: 34px; height: 34px; border-radius: 9px;
+  display: flex; align-items: center; justify-content: center;
+  background: var(--ink-3); border: 1px solid var(--edge);
+  color: var(--gold); font-size: 17px;
+}
+.guide-h {
+  font-family: var(--display); font-size: 15px; font-weight: 600;
+  color: var(--parchment); margin: 3px 0 3px;
+}
+.guide-p { color: #cfc3b0; font-size: 14px; line-height: var(--line-prose); margin: 0; }
+
+.guide-title, .guide-lede, .guide .hint, .guide .primary { flex: 0 0 auto; }
+.guide .hint { margin: 0 0 14px; }
+.guide .primary { width: 100%; }
+
+/* the reopen button, under the lobby tagline */
+.guide-open { display: block; margin: 0 auto 20px; }
+
 /* ── toast ──────────────────────────────────────────────────────────── */
 
 .toast {

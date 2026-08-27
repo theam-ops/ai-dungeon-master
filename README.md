@@ -14,6 +14,8 @@
 [![Dice](https://img.shields.io/badge/dice-rolled%20in%20Python-7fb069)](game/rules.py)
 [![Play from](https://img.shields.io/badge/play%20from-browser%20%7C%20phone%20%7C%20terminal-6f9bb5)](#playing-from-your-phone)
 
+> อ่านคู่มือภาษาไทยได้ที่ **[README.th.md](README.th.md)**
+
 A D&D-style RPG where Claude Opus 5 runs the table. It narrates, voices every NPC,
 and adjudicates the rules. The parts a language model is bad at — dice, arithmetic,
 remembering your HP — run in Python instead.
@@ -535,6 +537,7 @@ renamed export still imports.
 
 | Where | What |
 |---|---|
+| **How this works** (in the lobby) | The four-step guide — it opens by itself on a first visit |
 | Message box | Type what your character does, in plain language |
 | English / ไทย | Switch the interface language, any time |
 | Which AI runs the game | Hand the table to a different AI |
