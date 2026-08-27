@@ -98,12 +98,24 @@ def test_reading_a_party_fills_in_missing_skills(tmp_path, monkeypatch):
 # what the DM is told
 # --------------------------------------------------------------------------- #
 
-def test_the_state_block_carries_the_bonus_and_the_proficient_list():
+def test_the_state_block_carries_worked_out_totals_for_proficient_skills():
     entry = json.loads(rules.state_block([a_rogue()]))[0]
     assert entry["proficiency_bonus"] == 2
-    assert entry["skills"] == rules.CLASS_SKILLS["Rogue"]
-    # the ability modifiers it needs to add them to are already there
-    assert entry["modifiers"]["DEX"] == 3
+    # a number to copy, not a sum to get wrong: DEX 16 -> +3, +2 proficient
+    assert entry["skill_bonuses"]["Stealth"] == 5
+
+
+def test_the_state_block_leaves_out_skills_the_character_lacks():
+    """What pins the size decision: `modifiers` already covers the other twelve."""
+    entry = json.loads(rules.state_block([a_rogue()]))[0]
+    assert "Arcana" not in entry["skill_bonuses"]
+    assert entry["modifiers"]["INT"] == 1
+
+
+def test_the_dm_is_no_longer_asked_to_remember_a_proficiency_bonus():
+    from game import dm
+    assert "+2 proficiency at level 1-4" not in dm.SYSTEM
+    assert "skill_bonuses" in dm.SYSTEM
 
 
 def test_the_state_block_stays_small_enough_to_send_every_turn():

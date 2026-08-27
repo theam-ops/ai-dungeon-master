@@ -215,10 +215,13 @@ def state_block(characters, lang="en"):
             "hp": ch["hp"], "max_hp": ch["max_hp"], "ac": ch["ac"], "gold": ch["gold"],
             "abilities": ch["abilities"],
             "modifiers": {a: modifier(ch["abilities"][a]) for a in ABILITIES},
-            # the proficient skills and the bonus, not eighteen precomputed totals: this
-            # block is re-sent every single turn, and the DM can add two numbers
+            # The proficient skills with their totals already worked out - a number the
+            # DM copies rather than a sum it might get wrong. Only the proficient ones:
+            # `modifiers` above covers the other twelve, and this block is re-sent on
+            # every turn and echoed after every sheet change.
             "proficiency_bonus": proficiency_bonus(ch["level"]),
-            "skills": ch.get("skills", []),
+            "skill_bonuses": {s: skill_modifier(ch, s)
+                              for s in ch.get("skills", []) if s in SKILLS},
             "inventory": ch["inventory"], "conditions": ch["conditions"],
             "status": "UNCONSCIOUS AT 0 HP" if ch["hp"] == 0 else "conscious",
         })

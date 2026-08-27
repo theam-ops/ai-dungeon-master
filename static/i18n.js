@@ -63,6 +63,14 @@ const STRINGS = {
 
     level_line: "Level {0} {1} {2}",
     hp: "HP", ac: "AC", xp: "XP", gp: "GP",
+    view_story: "Story",
+    view_sheet: "Sheet",
+    view_skills: "Skills",
+    view_party: "Party",
+    proficient: "Proficient",
+    proficiency_is: "Proficiency bonus {0}",
+    recent_rolls: "Recent rolls",
+    party: "Party",
     roll: "roll",
     hud_collapse: "Hide the roll log",
     hud_expand: "Show the roll log",
@@ -177,7 +185,7 @@ const STRINGS = {
     ch_cond_rm: "cured: {0}",
     ch_level: "Level {0}! max HP {1}",
 
-    races: {}, classes: {}, stats: {},
+    races: {}, classes: {}, stats: {}, skills: {},
   },
 
   th: {
@@ -238,6 +246,14 @@ const STRINGS = {
 
     level_line: "เลเวล {0} {1}{2}",
     hp: "พลัง", ac: "เกราะ", xp: "EXP", gp: "ทอง",
+    view_story: "เรื่องราว",
+    view_sheet: "ใบตัวละคร",
+    view_skills: "ทักษะ",
+    view_party: "ปาร์ตี้",
+    proficient: "ชำนาญ",
+    proficiency_is: "โบนัสความชำนาญ {0}",
+    recent_rolls: "การทอยล่าสุด",
+    party: "ปาร์ตี้",
     roll: "ทอย",
     hud_collapse: "ซ่อนบันทึกการทอย",
     hud_expand: "แสดงบันทึกการทอย",
@@ -365,6 +381,16 @@ const STRINGS = {
       STR: "พละ", DEX: "คล่องแคล่ว", CON: "อดทน",
       INT: "สติปัญญา", WIS: "ปัญญาญาณ", CHA: "เสน่ห์",
     },
+    skills: {
+      Athletics: "กีฬา",
+      Acrobatics: "กายกรรม", "Sleight of Hand": "มือไว", Stealth: "ย่องเบา",
+      Arcana: "เวทวิทยา", History: "ประวัติศาสตร์", Investigation: "สืบสวน",
+      Nature: "ธรรมชาติวิทยา", Religion: "ศาสนา",
+      "Animal Handling": "ควบคุมสัตว์", Insight: "หยั่งรู้", Medicine: "การแพทย์",
+      Perception: "สังเกต", Survival: "เอาตัวรอด",
+      Deception: "หลอกลวง", Intimidation: "ข่มขู่",
+      Performance: "การแสดง", Persuasion: "โน้มน้าว",
+    },
   },
 };
 
@@ -389,6 +415,7 @@ function t(key, ...args) {
 const tRace  = (k) => (STRINGS[LANG].races  || {})[k] || k;
 const tClass = (k) => (STRINGS[LANG].classes || {})[k] || k;
 const tStat  = (k) => (STRINGS[LANG].stats  || {})[k] || k;
+const tSkill = (k) => (STRINGS[LANG].skills || {})[k] || k;
 
 /* Apply translations to everything marked up in index.html. */
 function applyI18n(root = document) {

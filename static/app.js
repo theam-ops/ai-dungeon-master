@@ -3,6 +3,20 @@
    Interface strings live in i18n.js. */
 
 const $ = (id) => document.getElementById(id);
+/* SVG needs its own namespace: document.createElement("svg") builds an inert
+   HTMLUnknownElement that renders nothing, and `className` on an SVG element is a
+   read-only SVGAnimatedString, so `el()` below cannot make one. */
+const SVGNS = "http://www.w3.org/2000/svg";
+function icon(name, cls) {
+  const svg = document.createElementNS(SVGNS, "svg");
+  svg.setAttribute("class", "ic " + (cls || ""));
+  svg.setAttribute("aria-hidden", "true");     // always beside a label that carries it
+  const use = document.createElementNS(SVGNS, "use");
+  use.setAttribute("href", "#ic-" + name);
+  svg.append(use);
+  return svg;
+}
+
 const el = (tag, cls, text) => {
   const n = document.createElement(tag);
   if (cls) n.className = cls;
@@ -101,10 +115,10 @@ async function refreshUI() {
   }
   if (S.pending) renderPick(S.pending);
   if (S.campaign) {
-    renderParty();
+    renderLive();
     // the count only — re-filling the box would throw away notes being typed right now
     if (!$("drawer").classList.contains("hidden")) {
-      renderSheet(); renderAI(); renderNotesCount();
+      renderAI(); renderNotesCount();
     }
   }
   if (!$("screen-lobby").classList.contains("hidden")) {
@@ -396,7 +410,9 @@ function renderStats() {
     const v = S.picked.scores[a];
     const mod = Math.floor((v - 10) / 2);
     const cell = el("div", "stat" + (a === primary ? " primary" : ""));
-    cell.append(el("div", "k", tStat(a)), el("div", "v", String(v)),
+    const key = el("div", "k");
+    key.append(icon(a, "ab-" + a), el("span", "", tStat(a)));
+    cell.append(key, el("div", "v", String(v)),
                 el("div", "m", (mod >= 0 ? "+" : "") + mod));
     box.append(cell);
   });
@@ -1178,9 +1194,7 @@ $("btn-illustrate").onclick = async () => {
 async function refreshParty() {
   const info = await api(`/api/campaigns/${S.campaign.id}`);
   S.party = info.party;
-  renderParty();
-  renderHud();
-  renderSheet();
+  renderLive();
   renderPortrait();
 }
 
@@ -1203,8 +1217,8 @@ async function enterCampaign(id) {
   localStorage.setItem("campaign_id", id);
 
   $("feed").innerHTML = "";
-  renderParty();
-  renderHud();
+  view = "story";              // never drop someone into a campaign on a stats tab
+  renderLive();
   show("game");
   connect();
 }
@@ -1304,6 +1318,7 @@ function handle(ev) {
       S.rolls.push({ reason: ev.reason, total: ev.total, crit: ev.crit });
       if (S.rolls.length > HUD_ROLLS) S.rolls.shift();
       renderHud();
+      renderDash();
       break;
     }
 
@@ -1384,10 +1399,8 @@ function handle(ev) {
 
     case "party":
       S.party = ev.party;
-      renderParty();
-      renderHud();
+      renderLive();
       if (!$("drawer").classList.contains("hidden")) renderPortrait();
-      if (!$("drawer").classList.contains("hidden")) renderSheet();
       break;
   }
 }
@@ -1536,61 +1549,270 @@ function renderHud() {
   body.append(rolls);
 }
 
-function renderSheet() {
-  const c = S.party.find((p) => p.name === S.campaign.you);
-  const body = $("sheet-body");
-  body.innerHTML = "";
-  if (!c) return;
+/* ── the dashboard ──────────────────────────────────────────────────────
+   One set of card builders, two shells. On a wide screen they fill a panel beside the
+   story; on a phone they fill the same box behind tabs, because there is no room for
+   both. Every builder returns a node and reads only from S.party, so it does not care
+   which shell it lands in. */
 
+const SKILL_ABILITY = {
+  Athletics: "STR",
+  Acrobatics: "DEX", "Sleight of Hand": "DEX", Stealth: "DEX",
+  Arcana: "INT", History: "INT", Investigation: "INT", Nature: "INT", Religion: "INT",
+  "Animal Handling": "WIS", Insight: "WIS", Medicine: "WIS",
+  Perception: "WIS", Survival: "WIS",
+  Deception: "CHA", Intimidation: "CHA", Performance: "CHA", Persuasion: "CHA",
+};
+
+const DESKTOP = window.matchMedia("(min-width: 1024px)");
+const signed = (n) => (n >= 0 ? "+" : "") + n;
+const abilityMod = (c, a) => Math.floor((c.abilities[a] - 10) / 2);
+
+/* Mirrors rules.proficiency_bonus: +2 at level 1-4, a point every four after. */
+const proficiencyBonus = (level) => 2 + Math.floor(Math.max(0, (level || 1) - 1) / 4);
+
+function skillTotal(c, skill) {
+  const base = abilityMod(c, SKILL_ABILITY[skill]);
+  return base + ((c.skills || []).includes(skill) ? proficiencyBonus(c.level) : 0);
+}
+
+function card(titleKey, iconName) {
+  const box = el("section", "card");
+  if (titleKey) {
+    const h = el("h3", "card-title");
+    if (iconName) h.append(icon(iconName));
+    h.append(el("span", "", t(titleKey)));
+    box.append(h);
+  }
+  return box;
+}
+
+function cardVitals(c) {
+  const box = card();
+  const head = el("div", "who-row");
   if (c.portrait) {
-    const face = el("img", "sheet-face");
+    const face = el("img", "who-face");
     face.src = mediaUrl(c.portrait);
     face.alt = c.name;
     face.onclick = () => openLightbox(face.src, c.name);
-    body.append(face);
+    head.append(face);
   }
-  body.append(el("h2", "sheet-name", c.name));
-  body.append(el("p", "sheet-sub", t("level_line", c.level, tRace(c.race), tClass(c.class))));
+  const names = el("div");
+  names.append(el("div", "who-name", c.name));
+  names.append(el("div", "who-sub", t("level_line", c.level, tRace(c.race), tClass(c.class))));
+  head.append(names);
+  box.append(head);
+
+  const frac = c.max_hp ? c.hp / c.max_hp : 0;
+  const hp = el("div", "dash-hp" + (frac < 0.34 ? " low" : ""));
+  const hpLabel = el("div", "dash-hpnum");
+  hpLabel.append(icon("hp"), el("span", "", t("hp") + " " + c.hp + "/" + c.max_hp));
+  const track = el("div", "dash-track");
+  const fill = el("div", "dash-fill");
+  fill.style.width = Math.max(0, Math.min(100, Math.round(frac * 100))) + "%";
+  track.append(fill);
+  hp.append(hpLabel, track);
+  box.append(hp);
 
   const vitals = el("div", "sheet-vitals");
-  [[t("hp"), `${c.hp}/${c.max_hp}`], [t("ac"), c.ac], [t("xp"), c.xp], [t("gp"), c.gold]]
-    .forEach(([k, v]) => {
-      const box = el("div", "vital");
-      box.append(el("div", "k", k), el("div", "v", String(v)));
-      vitals.append(box);
+  [["ac", t("ac"), c.ac], ["xp", t("xp"), c.xp], ["gp", t("gp"), c.gold]]
+    .forEach((row) => {
+      const cell = el("div", "vital");
+      const k = el("div", "k");
+      k.append(icon(row[0]), el("span", "", row[1]));
+      cell.append(k, el("div", "v", String(row[2])));
+      vitals.append(cell);
     });
-  body.append(vitals);
-
-  const stats = el("div", "stats");
-  Object.entries(c.abilities).forEach(([a, v]) => {
-    const mod = Math.floor((v - 10) / 2);
-    const cell = el("div", "stat");
-    cell.append(el("div", "k", tStat(a)), el("div", "v", String(v)),
-                el("div", "m", (mod >= 0 ? "+" : "") + mod));
-    stats.append(cell);
-  });
-  body.append(stats);
+  box.append(vitals);
 
   const inv = el("p", "sheet-list");
   inv.append(el("b", "", t("carrying")));
   inv.append(document.createTextNode(c.inventory.join(", ") || t("nothing")));
-  inv.style.marginTop = "14px";
-  body.append(inv);
+  box.append(inv);
+  return box;
+}
 
-  if (c.conditions && c.conditions.length) {
-    const cond = el("p", "sheet-list cond");
-    cond.append(el("b", "", t("conditions")));
-    cond.append(document.createTextNode(c.conditions.join(", ")));
-    body.append(cond);
+function cardAbilities(c) {
+  const box = card("abilities", "skill");
+  const stats = el("div", "stats");
+  Object.keys(c.abilities).forEach((a) => {
+    const cell = el("div", "stat");
+    const k = el("div", "k");
+    k.append(icon(a, "ab-" + a), el("span", "", tStat(a)));
+    cell.append(k, el("div", "v", String(c.abilities[a])),
+                el("div", "m", signed(abilityMod(c, a))));
+    stats.append(cell);
+  });
+  box.append(stats);
+  return box;
+}
+
+function cardSkills(c) {
+  // "skills" is the skill-name vocabulary map, not a string - t() would hand back the
+  // whole object and render "[object Object]"
+  const box = card("view_skills", "skill");
+  const prof = new Set(c.skills || []);
+  box.append(el("p", "hint", t("proficiency_is", signed(proficiencyBonus(c.level)))));
+
+  const list = el("div", "skill-list");
+  Object.keys(SKILL_ABILITY)
+    .sort((a, b) => tSkill(a).localeCompare(tSkill(b)))
+    .forEach((skill) => {
+      const ability = SKILL_ABILITY[skill];
+      const row = el("div", "skill-row" + (prof.has(skill) ? " prof" : ""));
+      const name = el("div", "name");
+      name.append(icon(ability, "ab-" + ability), el("span", "", tSkill(skill)));
+      row.append(name);
+      if (prof.has(skill)) {
+        const mark = el("span", "prof-dot");
+        mark.title = t("proficient");
+        mark.setAttribute("aria-label", t("proficient"));
+        row.append(mark);
+      }
+      row.append(el("div", "num", signed(skillTotal(c, skill))));
+      list.append(row);
+    });
+  box.append(list);
+  return box;
+}
+
+function cardConditions(c) {
+  if (!c.conditions || !c.conditions.length) return null;
+  const box = card("conditions", "cond");
+  const chips = el("div", "cond-chips");
+  // verbatim, including duplicates in two languages: the DM writes these as free text,
+  // and a chip that shows the truth beats one that shows a filtered lie
+  c.conditions.forEach((x) => chips.append(el("span", "hud-cond", x)));
+  box.append(chips);
+  return box;
+}
+
+function cardParty() {
+  const box = card("party", "party");
+  const list = el("div", "party-list");
+  S.party.forEach((p) => {
+    const row = el("div", "party-row" + (p.name === S.campaign.you ? " you" : ""));
+    if (p.portrait) {
+      const face = el("img", "party-face");
+      face.src = mediaUrl(p.portrait);
+      face.alt = "";
+      row.append(face);
+    }
+    const who = el("div", "party-who");
+    who.append(el("div", "party-name", p.name));
+    who.append(el("div", "party-sub",
+                  t("level_line", p.level, tRace(p.race), tClass(p.class))));
+    const frac = p.max_hp ? p.hp / p.max_hp : 0;
+    const track = el("div", "dash-track");
+    const fill = el("div", "dash-fill");
+    fill.style.width = Math.max(0, Math.round(frac * 100)) + "%";
+    if (frac < 0.34) fill.style.background = "var(--red)";
+    track.append(fill);
+    who.append(track);
+    row.append(who, el("div", "party-hp", p.hp + "/" + p.max_hp));
+    list.append(row);
+  });
+  box.append(list);
+  return box;
+}
+
+function cardRolls() {
+  if (!S.rolls.length) return null;
+  const box = card("recent_rolls", "dice");
+  const list = el("div", "roll-list");
+  S.rolls.slice().reverse().forEach((r) => {
+    const row = el("div", "roll-row" + (r.crit ? " crit-" + r.crit : ""));
+    row.append(el("span", "why", r.reason || t("roll")));
+    row.append(el("b", "", String(r.total)));
+    list.append(row);
+  });
+  box.append(list);
+  return box;
+}
+
+/* Which shell, and what goes in it. */
+const VIEWS = ["story", "sheet", "skills", "party"];
+const VIEW_ICONS = { story: "story", sheet: "scroll", skills: "skill", party: "party" };
+
+/* Not persisted, deliberately. The HUD's collapsed state is remembered because it is a
+   strip; a remembered view tab means closing the app on "Skills" and reopening it to no
+   story at all. */
+let view = "story";
+
+function renderDash() {
+  const box = $("dash-body");
+  if (!box) return;
+  const c = S.party.find((p) => p.name === (S.campaign && S.campaign.you));
+  box.innerHTML = "";
+  const wide = DESKTOP.matches;
+
+  if (c) {
+    if (wide) {
+      // all of it at once; the topbar strip already carries the party on a wide screen
+      [cardVitals(c), cardAbilities(c), cardConditions(c), cardRolls(), cardSkills(c)]
+        .forEach((n) => n && box.append(n));
+    } else if (view === "sheet") {
+      [cardVitals(c), cardAbilities(c), cardConditions(c), cardRolls()]
+        .forEach((n) => n && box.append(n));
+    } else if (view === "skills") {
+      box.append(cardSkills(c));
+    } else if (view === "party") {
+      box.append(cardParty());
+    }
   }
 
-  body.append(el("p", "hint", t("campaign_code", S.campaign.code)));
+  // on a phone the panel replaces the story, so the tabs are the only way back to it
+  $("dash").classList.toggle("hidden", wide ? false : view === "story");
+  $("feed").classList.toggle("hidden", !wide && view !== "story");
+  $("view-tabs").classList.toggle("hidden", wide);
+  renderViewTabs();
 }
+
+function renderViewTabs() {
+  const bar = $("view-tabs");
+  bar.innerHTML = "";
+  if (DESKTOP.matches) return;
+  VIEWS.forEach((name) => {
+    const b = el("button", "gtab" + (name === view ? " on" : ""));
+    b.type = "button";
+    b.append(icon(VIEW_ICONS[name]), el("span", "", t("view_" + name)));
+    b.onclick = () => {
+      view = name;
+      renderDash();
+      if (name === "story") scrollFeed(true);
+    };
+    bar.append(b);
+  });
+}
+
+/* Anything that changes a character changes all three of these. */
+function renderLive() {
+  renderParty();
+  renderHud();
+  renderDash();
+}
+
+/* Re-lay-out when the screen changes shape - a rotated phone, a dragged window.
+   `matchMedia` change is the tidier event but does not fire under every emulated
+   viewport, and being wrong here strands someone with a hidden panel and no tabs.
+   Caching the last known width to skip renders looked like an optimisation and was a
+   bug: the cached flag and what the render actually read could disagree, leaving the
+   layout stuck mid-flip. So: always re-render, once per frame. */
+let dashTimer = 0;
+function onViewportChange() {
+  // a timer, not requestAnimationFrame: rAF is paused while the page is not
+  // compositing - a background tab, a hidden window - so a resize there would never
+  // be answered, and the layout would still be wrong when it came back
+  clearTimeout(dashTimer);
+  dashTimer = setTimeout(renderDash, 100);
+}
+DESKTOP.addEventListener("change", onViewportChange);
+window.addEventListener("resize", onViewportChange);
 
 function openDrawer(open) {
   $("drawer").classList.toggle("hidden", !open);
   $("scrim").classList.toggle("hidden", !open);
-  if (open) { renderSheet(); renderAI(); renderPortrait(); renderLore(); renderGallery(); fillNotes();
+  if (open) { renderAI(); renderPortrait(); renderLore(); renderGallery(); fillNotes();
               $("library-note").textContent = t("library_hint"); }
   else $("ai-list").classList.add("hidden");
 }

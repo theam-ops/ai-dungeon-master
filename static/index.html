@@ -17,6 +17,31 @@
 </head>
 <body>
 
+<!-- Icon sprite. Stroked SVG rather than emoji: emoji glyphs come from whatever the OS
+     ships and change shape between machines, and the app's own fonts don't carry them.
+     These inherit currentColor, so they follow the theme for free. -->
+<svg xmlns="http://www.w3.org/2000/svg" style="display:none" aria-hidden="true">
+  <symbol id="ic-STR" viewBox="0 0 24 24"><path d="M6 8v8M18 8v8M3 10v4M21 10v4M6 12h12"/></symbol>
+  <symbol id="ic-DEX" viewBox="0 0 24 24"><path d="M4 18c5-1 8-4 10-9M14 9l4-2 1 4M6 20l2-4"/></symbol>
+  <symbol id="ic-CON" viewBox="0 0 24 24"><path d="M12 20s-7-4.3-7-9a4 4 0 0 1 7-2.6A4 4 0 0 1 19 11c0 4.7-7 9-7 9z"/></symbol>
+  <symbol id="ic-INT" viewBox="0 0 24 24"><path d="M9 4a3 3 0 0 0-3 3 3 3 0 0 0-1 5 3 3 0 0 0 2 5 3 3 0 0 0 5 1V4.8A3 3 0 0 0 9 4zM15 4a3 3 0 0 1 3 3 3 3 0 0 1 1 5 3 3 0 0 1-2 5 3 3 0 0 1-5 1"/></symbol>
+  <symbol id="ic-WIS" viewBox="0 0 24 24"><path d="M2 12s4-6 10-6 10 6 10 6-4 6-10 6-10-6-10-6z"/><circle cx="12" cy="12" r="2.5"/></symbol>
+  <symbol id="ic-CHA" viewBox="0 0 24 24"><path d="M4 6h6l-1 9a2 2 0 0 1-4 0zM14 6h6l-1 9a2 2 0 0 1-4 0z"/></symbol>
+  <symbol id="ic-hp" viewBox="0 0 24 24"><path d="M12 20s-7-4.3-7-9a4 4 0 0 1 7-2.6A4 4 0 0 1 19 11c0 4.7-7 9-7 9z"/></symbol>
+  <symbol id="ic-ac" viewBox="0 0 24 24"><path d="M12 3l7 3v6c0 4-3 7-7 9-4-2-7-5-7-9V6z"/></symbol>
+  <symbol id="ic-xp" viewBox="0 0 24 24"><path d="M12 3l2.6 5.6 6 .8-4.4 4.2 1.1 6L12 16.8 6.7 19.6l1.1-6L3.4 9.4l6-.8z"/></symbol>
+  <symbol id="ic-gp" viewBox="0 0 24 24"><circle cx="12" cy="12" r="8"/><path d="M12 8v8M9.5 10h5M9.5 14h5"/></symbol>
+  <symbol id="ic-dice" viewBox="0 0 24 24"><path d="M12 3l8 4.5v9L12 21l-8-4.5v-9z"/><path d="M12 3v18M4 7.5l8 4.5 8-4.5"/></symbol>
+  <symbol id="ic-party" viewBox="0 0 24 24"><circle cx="9" cy="9" r="3"/><path d="M3 19a6 6 0 0 1 12 0M16 7a3 3 0 0 1 0 6M17 19a5 5 0 0 0-2-4"/></symbol>
+  <symbol id="ic-cond" viewBox="0 0 24 24"><path d="M12 3l9 16H3z"/><path d="M12 9v5M12 16.5v.5"/></symbol>
+  <symbol id="ic-skill" viewBox="0 0 24 24"><path d="M4 20l7-7M9 6l9 9 3-3-9-9-3 3zM6 9L3 6l3-3 3 3"/></symbol>
+  <symbol id="ic-story" viewBox="0 0 24 24"><path d="M4 5h7v15H4zM13 5h7v15h-7z"/><path d="M11 5v15"/></symbol>
+  <symbol id="ic-art" viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="14" rx="2"/><path d="M3 14l5-4 4 3 3-2 6 5"/><circle cx="8.5" cy="8.5" r="1.2"/></symbol>
+  <symbol id="ic-gear" viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M12 2v3M12 19v3M2 12h3M19 12h3M5 5l2 2M17 17l2 2M19 5l-2 2M7 17l-2 2"/></symbol>
+  <symbol id="ic-scroll" viewBox="0 0 24 24"><path d="M6 4h11a2 2 0 0 1 2 2v12a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2z"/><path d="M8 8h7M8 12h7M8 16h4"/></symbol>
+</svg>
+
+
 <!-- ── login ─────────────────────────────────────────────────────────── -->
 <section id="screen-login" class="screen center hidden">
   <div class="panel narrow">
@@ -128,7 +153,13 @@
     <button class="icon" id="btn-sheet" data-i18n-title="char_sheet">&#9733;</button>
   </header>
 
-  <main id="feed" class="feed"></main>
+  <!-- tabs only exist on a narrow screen; the panel takes their place on a wide one -->
+  <nav class="gtabs viewtabs hidden" id="view-tabs"></nav>
+
+  <div class="stage" id="stage">
+    <main id="feed" class="feed"></main>
+    <aside class="dash hidden" id="dash"><div class="dash-body" id="dash-body"></div></aside>
+  </div>
 
   <div id="thinking" class="thinking hidden">
     <span></span><span></span><span></span><em data-i18n="thinking"></em>
@@ -155,7 +186,6 @@
   <div class="scrim hidden" id="scrim"></div>
   <aside class="drawer hidden" id="drawer">
     <div class="drawer-handle"></div>
-    <div id="sheet-body"></div>
     <div class="drawer-tools">
       <div class="row">
         <input id="private-roll" placeholder="1d20+3" spellcheck="false">

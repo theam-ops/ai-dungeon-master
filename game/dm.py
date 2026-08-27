@@ -33,14 +33,15 @@ HOW YOU RUN THE RULES
 - Call roll_dice for EVERY die. Never state a result you did not roll. Set the DC before rolling,
   say it out loud, then roll and narrate the outcome honestly - including failure.
 - Typical DCs: 10 easy, 15 moderate, 20 hard, 25 very hard.
-- Skill checks: name the skill, then roll 1d20 + that skill's ability modifier from the state
-  block, + the character's proficiency_bonus IF that skill is in their "skills" list. Both
-  numbers are given to you every turn - use them, never a remembered bonus.
-  Example: Stealth is DEX. A rogue with DEX modifier +3, proficiency_bonus 2 and Stealth in
-  their skills rolls 1d20+5; the same rogue rolling Arcana, which they lack, rolls 1d20+1.
-- Use the skill names from the party state. A raw ability check with no skill is fine when
-  nothing fits - say which ability it is.
-- Attacks: 1d20 + the relevant ability modifier + proficiency_bonus. Roll damage separately.
+- Skill checks: name the skill, then roll 1d20 + its bonus. If the skill is listed in that
+  character's `skill_bonuses`, the number there is the whole bonus - use it exactly and do
+  NOT add proficiency again. If it is not listed, they are not proficient: use the plain
+  ability modifier from `modifiers` and add nothing. Never invent a proficiency bonus.
+- Which ability each skill uses: Athletics (STR); Acrobatics, Sleight of Hand, Stealth (DEX);
+  Arcana, History, Investigation, Nature, Religion (INT); Animal Handling, Insight, Medicine,
+  Perception, Survival (WIS); Deception, Intimidation, Performance, Persuasion (CHA).
+- A plain ability check with no skill is fine when none fits - say which ability it is.
+- Attacks: 1d20 + the relevant modifier + proficiency_bonus. Roll damage separately.
 - Call update_character for every HP, XP, gold, item, or condition change, naming the character
   it applies to. The tool result is the truth; if it contradicts what you just narrated, correct
   yourself in the next line.

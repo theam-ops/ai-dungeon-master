@@ -187,6 +187,14 @@ button:disabled { opacity: .45; cursor: default; }
 .stat .m { font-family: var(--mono); font-size: 11px; color: var(--gold-dim); }
 .stat.primary { border-color: var(--gold-dim); }
 
+/* icons: stroked, sized by font-size, coloured by whatever they sit in */
+.ic {
+  width: 1em; height: 1em; flex: 0 0 auto;
+  fill: none; stroke: currentColor; stroke-width: 1.7;
+  stroke-linecap: round; stroke-linejoin: round;
+  vertical-align: -.13em;
+}
+
 /* ── game screen ────────────────────────────────────────────────────── */
 
 #screen-game { display: flex; flex-direction: column; height: 100dvh; }
@@ -218,6 +226,118 @@ button:disabled { opacity: .45; cursor: default; }
 .pc .hpbar { height: 3px; background: #3a2a24; border-radius: 2px; margin-top: 3px; overflow: hidden; }
 .pc .hpfill { height: 100%; background: var(--green); transition: width .4s ease; }
 .pc .hptext { font-family: var(--mono); font-size: 10px; color: var(--muted); }
+
+/* stage: the feed, and on a wide screen the dashboard beside it.
+   `min-height: 0` on both is load-bearing - without it a nested flex child's
+   overflow-y:auto stops scrolling and the page grows instead. */
+.stage { flex: 1 1 auto; min-height: 0; display: flex; justify-content: center; }
+
+.viewtabs {
+  flex: 0 0 auto; padding: 7px 12px;
+  border-bottom: 1px solid var(--edge);
+  overflow-x: auto; scrollbar-width: none;
+}
+.viewtabs::-webkit-scrollbar { display: none; }
+.viewtabs .gtab { display: flex; align-items: center; gap: 6px; padding: 8px 14px; font-size: 13px; }
+
+.dash { min-height: 0; overflow-y: auto; flex: 1 1 auto; }
+.dash-body {
+  display: flex; flex-direction: column; gap: 12px;
+  padding: 14px 16px calc(16px + var(--safe-b));
+  max-width: 720px; margin: 0 auto;
+}
+
+@media (min-width: 1024px) {
+  /* 720px of feed plus a 320px panel needs a laptop; squeezing the feed to make room
+     on a tablet would spoil the one thing this app is for */
+  .dash {
+    flex: 0 0 320px;
+    border-left: 1px solid var(--edge);
+    background: rgba(26,23,20,.45);
+  }
+  .dash-body { padding: 16px 14px calc(16px + var(--safe-b)); }
+  .hud { display: none; }          /* the panel says all of it, and more */
+}
+
+/* dashboard cards */
+.card {
+  display: flex; flex-direction: column; gap: 9px;
+  padding: 12px 13px; border-radius: 10px;
+  background: var(--ink-2); border: 1px solid var(--edge);
+}
+.card-title {
+  display: flex; align-items: center; gap: 7px; margin: 0;
+  font-family: var(--display); font-size: 12px; font-weight: 600;
+  letter-spacing: .08em; text-transform: uppercase; color: var(--gold-dim);
+}
+.card .hint { margin: 0; }
+
+.who-row { display: flex; align-items: center; gap: 10px; }
+.who-face {
+  width: 46px; height: 46px; border-radius: 8px; object-fit: cover;
+  border: 1px solid var(--edge); cursor: zoom-in;
+}
+.who-name { font-family: var(--display); font-weight: 600; font-size: 16px; }
+.who-sub { font-size: 12px; color: var(--muted); }
+
+.dash-hp { display: flex; flex-direction: column; gap: 4px; }
+.dash-hpnum { display: flex; align-items: center; gap: 6px;
+              font-family: var(--mono); font-size: 12px; color: var(--muted); }
+.dash-track { height: 6px; border-radius: 3px; background: #3a2a24; overflow: hidden; }
+.dash-fill { height: 100%; background: var(--green); transition: width .4s ease; }
+.dash-hp.low .dash-fill { background: var(--red); }
+
+.sheet-vitals .k { display: flex; align-items: center; gap: 5px; justify-content: center; }
+.stat .k { display: flex; align-items: center; gap: 5px; justify-content: center; }
+
+/* skills */
+.skill-list { display: flex; flex-direction: column; }
+.skill-row {
+  display: flex; align-items: center; gap: 8px;
+  padding: 5px 2px; border-bottom: 1px solid rgba(51,44,36,.5);
+  font-size: 13px; color: var(--muted);
+}
+.skill-row:last-child { border-bottom: 0; }
+.skill-row .name { display: flex; align-items: center; gap: 7px; flex: 1 1 auto; min-width: 0; }
+.skill-row .name span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.skill-row .num { font-family: var(--mono); font-size: 13px; flex: 0 0 auto; }
+.skill-row.prof { color: var(--parchment); }
+.skill-row.prof .num { color: var(--gold); }
+.prof-dot {
+  width: 5px; height: 5px; border-radius: 50%; background: var(--gold);
+  flex: 0 0 auto;
+}
+
+/* per-ability tints, drawn from the palette already in use */
+.ab-STR { color: var(--red); }
+.ab-DEX { color: var(--green); }
+.ab-CON { color: #c98a4b; }
+.ab-INT { color: var(--blue); }
+.ab-WIS { color: #9a8ec4; }
+.ab-CHA { color: var(--gold); }
+
+.cond-chips { display: flex; flex-wrap: wrap; gap: 5px; }
+
+.party-list { display: flex; flex-direction: column; gap: 8px; }
+.party-row { display: flex; align-items: center; gap: 9px; }
+.party-row.you .party-name { color: var(--gold); }
+.party-face { width: 34px; height: 34px; border-radius: 7px; object-fit: cover;
+              border: 1px solid var(--edge); flex: 0 0 auto; }
+.party-who { flex: 1 1 auto; min-width: 0; display: flex; flex-direction: column; gap: 3px; }
+.party-name { font-size: 13px; font-weight: 500; }
+.party-sub { font-size: 11px; color: var(--muted); }
+.party-hp { font-family: var(--mono); font-size: 11px; color: var(--muted); flex: 0 0 auto; }
+
+.roll-list { display: flex; flex-direction: column; gap: 4px; }
+.roll-row {
+  display: flex; align-items: baseline; gap: 8px;
+  font-family: var(--mono); font-size: 12px; color: var(--muted);
+}
+.roll-row .why { flex: 1 1 auto; min-width: 0; overflow: hidden;
+                 text-overflow: ellipsis; white-space: nowrap; }
+.roll-row b { color: var(--parchment); flex: 0 0 auto; }
+.roll-row.crit-success b { color: var(--green); }
+.roll-row.crit-fail b { color: var(--red); }
 
 /* feed */
 .feed {
@@ -540,13 +660,19 @@ button:disabled { opacity: .45; cursor: default; }
 :root[data-lang="th"] .sheet-list b,
 :root[data-lang="th"] .player-line .who,
 :root[data-lang="th"] .stat .k,
-:root[data-lang="th"] .vital .k {
+:root[data-lang="th"] .vital .k,
+:root[data-lang="th"] .card-title,
+:root[data-lang="th"] .who-name,
+:root[data-lang="th"] .skill-row .name {
   text-transform: none;
   letter-spacing: .02em;
   font-size: 12px;
 }
 :root[data-lang="th"] .stat .k,
 :root[data-lang="th"] .vital .k { font-size: 11px; }
+:root[data-lang="th"] .card-title { font-size: 12.5px; }
+:root[data-lang="th"] .who-name { font-size: 15px; }
+:root[data-lang="th"] .skill-row .name { font-size: 13px; }
 :root[data-lang="th"] .pc .n { letter-spacing: 0; font-size: 12.5px; }
 :root[data-lang="th"] .primary { letter-spacing: .01em; }
 
