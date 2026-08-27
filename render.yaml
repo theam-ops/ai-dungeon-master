@@ -2,23 +2,10 @@ services:
   - type: web
     name: ai-dungeon-master
     runtime: docker
-    plan: starter          # free has no persistent disk; see the note at the bottom
+    plan: free
     healthCheckPath: /healthz
 
-    # Campaigns, characters, uploaded art and imported notes all live on this disk.
-    # Without it the free plan wipes them on every redeploy and every idle spin-down.
-    disk:
-      name: data
-      mountPath: /data
-      sizeGB: 1
-
     envVars:
-      # Where the data actually goes. Both must point at the mounted disk.
-      - key: DND_DB
-        value: /data/campaign.db
-      - key: DND_MEDIA
-        value: /data/media
-
       # Set this, or anyone who finds the URL can play on your credit.
       - key: APP_PASSWORD
         sync: false
@@ -27,17 +14,37 @@ services:
       # (aistudio.google.com/apikey); an Anthropic key is billed per token.
       # NOTE: the "Claude Pro/Max (this machine)" backend does NOT work here. It drives
       # the Claude Code installed on the host, and there is none in a datacentre - a
-      # deployed copy needs a key.
+      # deployed copy needs a key. `python launch.py --share` is the route that keeps a
+      # subscription running the table.
       - key: GEMINI_API_KEY
         sync: false
       - key: ANTHROPIC_API_KEY
         sync: false
 
-      # Signs the cookie that says which character is yours. Generated once and kept,
-      # so a redeploy does not log the whole table out.
+      # Signs the cookie that says which character is yours. Pinned rather than
+      # generated, so a redeploy does not log the whole table out.
       - key: SESSION_SECRET
-        generateValue: true
+        sync: false
 
-# Staying on the free plan? Delete the `disk:` block and the DND_DB / DND_MEDIA vars,
-# set `plan: free`, and treat it as disposable: use Export in the app to keep anything
-# you care about, because a redeploy will take the rest.
+# ── What "free" costs you ───────────────────────────────────────────────────
+# The free plan has no persistent disk and sleeps after ~15 minutes of no traffic.
+# So:
+#   * campaigns, characters, uploaded art and imported notes are wiped by a redeploy
+#     and by a sleep. Treat the instance as disposable and use Export in the app for
+#     anything you want to keep - the .zip carries the images and documents too.
+#   * the first visit after a sleep takes the better part of a minute to answer.
+#
+# To keep data instead, move to a paid instance and add these back:
+#
+#   plan: starter
+#   disk:
+#     name: data
+#     mountPath: /data
+#     sizeGB: 1
+#
+# ...along with these two env vars, which are what actually put the data on the disk:
+#
+#   - key: DND_DB
+#     value: /data/campaign.db
+#   - key: DND_MEDIA
+#     value: /data/media

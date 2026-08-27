@@ -100,9 +100,23 @@ a `render.yaml`, so any container host works — Render, Railway, Fly.io, Koyeb.
 Render: push this folder to GitHub, create a Blueprint from `render.yaml`, and set
 `ANTHROPIC_API_KEY` and `APP_PASSWORD` in the dashboard.
 
-`render.yaml` is set up for this: a 1GB persistent disk at `/data`, with `DND_DB` and
-`DND_MEDIA` pointing into it so campaigns and uploaded art survive a redeploy. Set
-`APP_PASSWORD` and one AI key in the dashboard and it is ready.
+`render.yaml` is set up for the **free** plan: set `APP_PASSWORD` and one AI key in the
+dashboard and it is ready. The file itself says what to add — a `starter` plan and a
+disk — if you later want the data to survive.
+
+> **Free means disposable.** There is no persistent disk and the instance sleeps after
+> about fifteen minutes of no traffic, so campaigns, characters, uploaded art and
+> imported notes are wiped by a redeploy *and* by a sleep. Use **Export** for anything
+> you want to keep; the `.zip` carries the images and documents with it. The first visit
+> after a sleep also takes most of a minute to answer.
+
+> **Not Vercel, Netlify, or any serverless host.** They give a function a read-only
+> filesystem and an ephemeral `/tmp`, and spread traffic across instances that share no
+> storage — so `campaign.db` cannot persist, uploaded art cannot persist, and the live
+> feed breaks outright: it is one long SSE connection per browser against an in-memory
+> set of subscribers, and on separate instances the DM's narration never reaches the
+> other players. This app wants a container that stays running. Moving it to serverless
+> means an external database, external blob storage, and replacing the event stream.
 
 > **Claude Pro cannot come with it.** The "Claude Pro/Max (this machine)" backend drives
 > the Claude Code installed on the host, and there is none in a datacentre. A deployed
