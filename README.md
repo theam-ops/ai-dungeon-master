@@ -19,7 +19,12 @@ Play solo or with friends, from a browser or your phone, in English or ไทย
 ## 1. Start it
 
 **Windows:** double-click **`Play.cmd`**. It installs anything missing the first time,
-then opens your browser.
+then opens your browser. Closing that window stops the game.
+
+*Want it on your Desktop?* Open the `tools` folder and double-click
+**`Create shortcut.cmd`** once. That puts a d20 icon named **AI Dungeon Master** on your
+Desktop, and from then on you just double-click that. The shortcut remembers where this
+folder is, so run it again if you ever move the folder.
 
 **Anything else:**
 
