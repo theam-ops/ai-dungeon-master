@@ -957,12 +957,21 @@ async function renderAI() {
     // straight to the page that hands out the key (or installs Ollama).
     const row = el("div", "ai-row off");
     row.append(left);
+
+    // Signed out is the state where the sign-in button is most wanted, and it is also
+    // the state where this backend reports itself unavailable - so ask here too, not
+    // only on the available path.
+    if (p.kind === "claude-code") {
+      checkSignIn(row, p);
+      list.append(row);
+      return;
+    }
+
     if (p.key_url) {
-      // Ollama and Claude Code are installed, not keyed - don't send people
-      // looking for a key page that doesn't exist
-      const installed = p.kind === "ollama" || p.kind === "claude-code";
+      // Ollama is installed, not keyed - don't send people looking for a key page
+      // that doesn't exist
       const get = el("a", "ai-get" + (p.free ? " free" : ""),
-                     installed ? t("ai_install") : t("ai_get_key"));
+                     p.kind === "ollama" ? t("ai_install") : t("ai_get_key"));
       get.href = p.key_url;
       get.target = "_blank";
       get.rel = "noopener noreferrer";
@@ -985,6 +994,18 @@ async function checkSignIn(row, p) {
     tag.remove();               // couldn't ask; don't claim either way
     return;
   }
+  if (!state.installed) {
+    // nothing to sign into: this machine has no Claude Code
+    tag.remove();
+    const get = el("a", "ai-get", t("ai_install_claude"));
+    get.href = p.key_url || "https://claude.com/download";
+    get.target = "_blank";
+    get.rel = "noopener noreferrer";
+    row.append(get);
+    $("claude-login").classList.add("hidden");
+    return;
+  }
+
   tag.className = "ai-tag " + (state.logged_in ? "free" : "warn");
   tag.textContent = state.logged_in ? t("ai_signed_in") : t("ai_sign_in");
 
