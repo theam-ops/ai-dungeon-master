@@ -121,7 +121,8 @@ def test_claude_code_is_offered_exactly_this_campaigns_tools(fake_sdk):
     cid, party, repo = a_campaign()
     turn(cid, party, "I look around.", repo)
     offered = {t.split("__")[-1] for t in sdk.offered}
-    assert offered == {"roll_dice", "update_character", "equip_armor", "set_effect"}
+    assert offered == {"roll_dice", "update_character", "equip_armor", "set_effect",
+                       "use_spell_slot", "long_rest"}
     assert all(t.startswith(f"mcp__{claude_code.MCP_SERVER}__") for t in sdk.offered)
 
 

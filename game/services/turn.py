@@ -79,6 +79,7 @@ async def _turn(adapters, cid, actor, action, images):
     repo = adapters.repo
     characters = await repo.party(cid)
     history = await repo.get_history(cid)
+    house = await repo.campaign_house(cid)
 
     await broadcast(adapters, cid, {"kind": "thinking", "on": True})
     try:
@@ -86,7 +87,7 @@ async def _turn(adapters, cid, actor, action, images):
                                         await repo.campaign_lang(cid),
                                         await repo.campaign_backend(cid)
                                         or providers.default_id(),
-                                        images, cid, repo=repo):
+                                        images, cid, repo=repo, house=house):
             kind = event.pop("kind")
             if kind == "delta":
                 await broadcast(adapters, cid, {"kind": "delta", **event})

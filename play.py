@@ -118,6 +118,11 @@ def cmd_roll(a):
         print(f"  -> {'SUCCESS' if total >= a.dc else 'FAILURE'} against DC {a.dc}")
 
 
+def _slot(ch, level):
+    ok, message = rules.use_slot(ch, level)
+    return message if ok else f"REFUSED: {message} The spell is not cast."
+
+
 def cmd_update(a):
     data, path = load(a.name)
     ch = data["character"]
@@ -137,15 +142,23 @@ def cmd_update(a):
         ch["gold"] = max(0, ch["gold"] + a.gold)
         log.append(f"GP {ch['gold']}")
     for item in a.add or []:
-        ch["inventory"].append(item)
-        log.append(f"+ {item}")
+        name, qty = rules.add_item(ch, item)
+        log.append(f"+ {name}" + (f" ({qty})" if qty > 1 else ""))
     for item in a.remove or []:
-        match = next((i for i in ch["inventory"] if i.lower() == item.lower()), None)
-        if match:
-            ch["inventory"].remove(match)
-            log.append(f"- {match}")
+        name, gone, left = rules.remove_item(ch, item)
+        if name:
+            log.append(f"- {name}" + (f" ({gone})" if gone > 1 else "")
+                       + (f", {left} left" if left else ""))
         else:
             log.append(f"(not carried: {item})")
+    for level in a.use_slot or []:
+        log.append(_slot(ch, level))
+    if a.long_rest:
+        done = rules.long_rest(ch)
+        ch["effects"] = [fx for fx in ch.get("effects", []) if fx.get("turns") is None]
+        log.append(f"long rest: HP {done['hp_from']} -> {done['hp_to']}"
+                   + (f", {done['slots_restored']} spell slots back"
+                      if done["slots_restored"] else ""))
     for cond in a.condition or []:
         if cond not in ch["conditions"]:
             ch["conditions"].append(cond)
@@ -252,6 +265,10 @@ def main():
     u.add_argument("--ac-min", type=int, default=0, help="with --effect: AC floor")
     u.add_argument("--turns", type=int, default=0, help="with --effect: 0 = until ended")
     u.add_argument("--end-effect", action="append", metavar="NAME")
+    u.add_argument("--use-slot", action="append", type=int, metavar="LEVEL",
+                   help="spend a spell slot of this level (refused if none are left)")
+    u.add_argument("--long-rest", action="store_true",
+                   help="restore HP and spell slots; timed effects end")
     u.set_defaults(fn=cmd_update)
 
     nt = sub.add_parser("note", help="record something that happened")

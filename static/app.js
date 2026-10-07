@@ -1277,6 +1277,7 @@ async function refreshParty() {
 async function enterCampaign(id) {
   const info = await api(`/api/campaigns/${id}`);
   S.campaign = info;
+  renderHouse();
   S.party = info.party;
   S.backend = info.backend;
   S.notes = info.notes || "";
@@ -1413,6 +1414,14 @@ function handle(ev) {
 
     case "join":
       appendChip(el("div", "join-chip", ev.text || t("joins", ev.character)));
+      break;
+
+    case "house":
+      // a table rule changed - everyone sees who, and the toggle follows
+      if (S.campaign) S.campaign.house = { ...(S.campaign.house || {}), ...ev.changed };
+      Object.entries(ev.changed || {}).forEach(([rule, on]) => appendChip(el("div",
+        "join-chip", t(on ? "house_on" : "house_off", ev.character, t("house_" + HOUSE_KEYS[rule])))));
+      renderHouse();
       break;
 
     case "image": {
@@ -1734,6 +1743,39 @@ function cardItems(c) {
   }
   c.inventory.forEach((i) => list.append(el("span", "item", i)));
   box.append(list);
+
+  // weight against capacity, under this table's rules - worked out on the server
+  if (c.load) {
+    const l = c.load;
+    const status = { "over capacity": "load_over", "heavily encumbered": "load_heavy",
+                     "encumbered": "load_enc" }[l.status];
+    const parts = [t("load", l.carried, l.capacity)];
+    if (l.unweighed) parts.push(t("load_unweighed", l.unweighed));
+    const line = el("div", "load-line" + (status ? " strained" : ""));
+    line.append(el("span", "", parts.join(" \u00b7 ")));
+    if (status) line.append(el("span", "load-status", t(status)));
+    box.append(line);
+  }
+  return box;
+}
+
+/* What a caster has left, one row of pips per spell level. Nothing for anyone else -
+   including a level-1 ranger, who casts nothing yet. */
+function cardSlots(c) {
+  const levels = Object.keys(c.slots || {});
+  if (!levels.length) return null;
+  const box = card("spell_slots", "skill");
+  levels.forEach((lvl) => {
+    const [left, max] = c.slots[lvl];
+    const row = el("div", "slot-row");
+    const pips = el("span", "slot-pips");
+    pips.setAttribute("role", "img");
+    pips.setAttribute("aria-label", t("slots_left", left, max));
+    for (let i = 0; i < max; i++) pips.append(el("span", "pip" + (i < left ? " on" : "")));
+    row.append(el("span", "slot-lvl", t("slot_level", lvl)), pips,
+               el("span", "slot-count", `${left}/${max}`));
+    box.append(row);
+  });
   return box;
 }
 
@@ -1859,10 +1901,10 @@ function renderDash() {
   if (c) {
     if (wide) {
       // all of it at once; the topbar strip already carries the party on a wide screen
-      [cardVitals(c), cardConditions(c), cardItems(c), cardSkills(c),
+      [cardVitals(c), cardConditions(c), cardSlots(c), cardItems(c), cardSkills(c),
        cardAbilities(c), cardRolls()].forEach((n) => n && box.append(n));
     } else if (view === "character") {
-      [cardVitals(c), cardConditions(c), cardItems(c), cardSkills(c)]
+      [cardVitals(c), cardConditions(c), cardSlots(c), cardItems(c), cardSkills(c)]
         .forEach((n) => n && box.append(n));
     } else if (view === "detail") {
       [cardAbilities(c), cardRolls()].forEach((n) => n && box.append(n));
@@ -1937,6 +1979,26 @@ const DRAWER_TABS = ["you", "art", "table"];
 const DRAWER_ICONS = { you: "scroll", art: "art", table: "gear" };
 let drawerTab = localStorage.getItem("dtab") || "you";
 if (!DRAWER_TABS.includes(drawerTab)) drawerTab = "you";
+
+/* The table's optional rules. Server keys on the left, string suffixes on the right. */
+const HOUSE_KEYS = { variant_encumbrance: "variant_enc" };
+
+function renderHouse() {
+  const box = $("house-variant-enc");
+  if (box && S.campaign) box.checked = !!(S.campaign.house || {}).variant_encumbrance;
+}
+
+$("house-variant-enc").onchange = async (e) => {
+  const on = e.target.checked;
+  try {
+    const r = await api(`/api/campaigns/${S.campaign.id}/house`,
+                        { method: "POST", body: { variant_encumbrance: on } });
+    S.campaign.house = r.house;
+  } catch (err) {
+    e.target.checked = !on;           // the server said no; show what is actually set
+    toast(err.message);
+  }
+};
 
 function showDrawerTab(name) {
   drawerTab = name;

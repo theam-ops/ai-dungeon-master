@@ -31,7 +31,7 @@ Sorted by value per unit of work, not by the order the pillars were listed.
 | 0 | SSRF rebinding, streaming size cap, connection handling | ~1 day | **Done.** Also moved image work off the event loop — see below. |
 | 1 | Dynamic AC + effects | ~2 days | **Done.** |
 | 2 | Port boundary (`lite` adapters only) | ~1 week | **Done.** |
-| 3 | Items as records + equipment | ~1 week | Blocked on 1. Needs the string→key migration. |
+| 3 | Items as records + equipment | ~1 week | **Done.** |
 | 4 | Combat, initiative, turn queue | ~1 week | Blocked on 3 (weapons) and 1 (AC). |
 | 5 | Summarisation worker | ~4 days | Blocked on 2. **Pays for itself in tokens.** |
 | 6 | SRD retrieval | ~3 days | Cheap; `lore.py` already has the machinery. |
@@ -553,6 +553,21 @@ def test_services_do_not_import_adapters():
 ---
 
 ## Phase 3 — items, equipment, resources
+
+> **Done.** Items are `{name, key, qty}` records; weights, encumbrance and spell slots are
+> derived from them. Where it differs from the sketch below:
+>
+> - **`inventory` stays, as a derived view.** The browser, the CLI sheet and older exports
+>   read it; nothing writes it. Removing it would buy nothing.
+> - **No `slot`, `equipped` or `weight` fields on a record.** All three are derived — from
+>   the key, from the Phase 1 `equipment` map, from the SRD table — so they cannot drift.
+> - **Items the rules do not know are carried but unweighed**, and the DM is told how many.
+>   Inventing a weight for "a rusty key" would be the model's number wearing Python's coat.
+> - **The encumbrance variant is a real per-campaign house rule**: a `house` column, a
+>   `POST /house` endpoint, a toggle any player can flip, and an event in the feed saying who.
+> - **Spell slots follow SRD 5.1**, so a level-1 ranger has none. A refusal is a result, not
+>   an error, and the table is shown it. `long_rest` came along: slots need a way back.
+> - **No prod-only item tables (3.5).** They belong with the Postgres adapter in Phase 8.
 
 ### 3.1 The blocking problem
 

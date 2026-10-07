@@ -28,9 +28,9 @@ def make(klass="Wizard", dex=10, lang="en", **over):
 def wearing(klass, armour, dex, shield=False):
     """A character of `klass` wearing exactly `armour` (None for nothing)."""
     ch = make(klass, dex)
-    ch["inventory"] = [armour] if armour else []
-    if shield:
-        ch["inventory"].append("shield")
+    ch["items"] = []
+    for item in ([armour] if armour else []) + (["shield"] if shield else []):
+        rules.add_item(ch, item)
     ch["equipment"] = {"armor": armour, "shield": "shield" if shield else None}
     rules.recompute_ac(ch)
     return ch
@@ -173,7 +173,7 @@ def test_only_armour_and_shields_can_be_worn():
 
 def test_putting_on_new_armour_swaps_the_old():
     ch = make("Rogue", dex=12)                            # leather, 12
-    ch["inventory"].append("chain shirt")
+    rules.add_item(ch, "chain shirt")
     ok, message, entry = rules.wear(ch, "chain shirt")
     assert ok and "takes off" in message and entry == "chain shirt"
     assert ch["equipment"]["armor"] == "chain shirt"
@@ -198,7 +198,7 @@ def test_wearing_by_english_name_in_a_thai_campaign():
 
 def test_armour_that_leaves_the_inventory_comes_off():
     ch = make("Fighter", dex=12)
-    ch["inventory"].remove("chain mail")
+    rules.remove_item(ch, "chain mail")
     assert rules.reconcile_equipment(ch) == ["chain mail"]
     assert rules.recompute_ac(ch)[1] == 13                # 10 + 1 + shield 2
 
@@ -259,7 +259,7 @@ def test_the_dm_is_told_the_ac_and_how_it_was_reached():
 
 def test_equip_armor_tool_recomputes_and_reports():
     ch = make("Rogue", dex=12)
-    ch["inventory"].append("chain shirt")
+    rules.add_item(ch, "chain shirt")
     result, event = asyncio.run(dm.run_tool("equip_armor", {
         "character_name": "Test", "item": "chain shirt", "wear": True,
         "reason": "takes the guard's shirt"}, [ch]))
@@ -303,8 +303,15 @@ def test_a_whole_turn_putting_armour_on(app_client):
     carries the new number - the test that matters is what the model was sent."""
     client, stub = app_client
     table = new_table(client, stub)                       # Vess, a Rogue, in leather
+    # Stats are rolled, and at DEX 18 leather (11 + 4) and a chain shirt (13 + a capped
+    # 2) tie - so this test once failed whenever the dice were kind. Pin DEX: 14 (+2).
+    vess = rules.new_character("Vess", "Elf", "Rogue", scores={
+        "STR": 10, "DEX": 14, "CON": 12, "INT": 10, "WIS": 10, "CHA": 10})
+    store.db().execute("UPDATE characters SET data=? WHERE campaign_id=?",
+                       (json.dumps(vess), table.id))
+    store.db().commit()
     table.begin("A guard post, abandoned in a hurry.")
-    before = table.character("Vess")["ac"]
+    assert table.character("Vess")["ac"] == 13                     # leather 11 + 2
 
     events = table.act(
         "I take the chain shirt off the rack and put it on.",
@@ -320,7 +327,7 @@ def test_a_whole_turn_putting_armour_on(app_client):
     assert any(c.get("t") == "wear" for e in sheets for c in e["changes"])
     vess = table.character("Vess")
     assert vess["equipment"]["armor"] == "chain shirt"
-    assert vess["ac"] != before
+    assert vess["ac"] == 15                                        # chain shirt 13 + 2
     assert any(f"-> {vess['ac']}" in r for r in tool_results(stub.calls[-1]))
 
     table.act("I look around.", "Dust, and a draught from the stairs.")

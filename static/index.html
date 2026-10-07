@@ -255,6 +255,15 @@
         <button class="ghost" id="btn-export" data-i18n="export"></button>
       </div>
 
+      <h3 class="section-label" data-i18n="house_rules"></h3>
+      <!-- the text sits in its own span: applyI18n sets textContent, which would
+           otherwise delete the checkbox inside the label -->
+      <label class="house-toggle">
+        <input type="checkbox" id="house-variant-enc">
+        <span data-i18n="house_variant_enc"></span>
+      </label>
+      <p class="hint" data-i18n="house_variant_enc_hint"></p>
+
       <h3 class="section-label" data-i18n="which_ai"></h3>
       <button class="ai-button" id="btn-ai">
         <span class="ai-dot"></span>

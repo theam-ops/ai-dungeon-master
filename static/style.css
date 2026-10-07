@@ -676,6 +676,34 @@ button:disabled { opacity: .45; cursor: default; }
   overflow-wrap: anywhere;
 }
 .ac-from .ic { margin-top: 2px; color: var(--gold-dim); }
+
+/* what is carried, and what it costs */
+.load-line {
+  display: flex; flex-wrap: wrap; align-items: center; gap: 6px 8px;
+  margin-top: 10px; font-size: 12px; color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+.load-status {
+  padding: 1px 8px; border-radius: 999px; font-size: 11px;
+  border: 1px solid var(--red); color: var(--red);
+}
+
+/* spell slots: one row per level, a pip per slot */
+.slot-row { display: flex; align-items: center; gap: 10px; padding: 4px 0; }
+.slot-lvl { flex: 0 0 64px; font-size: 12px; color: var(--muted); }
+.slot-pips { display: flex; flex-wrap: wrap; gap: 5px; flex: 1 1 auto; }
+.pip {
+  width: 11px; height: 11px; border-radius: 50%;
+  border: 1px solid var(--gold-dim); background: transparent;
+}
+.pip.on { background: var(--gold); border-color: var(--gold); }
+.slot-count {
+  flex: 0 0 auto; font-family: var(--mono); font-size: 12px; color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.house-toggle { display: flex; align-items: center; gap: 10px; margin: 4px 0 2px; cursor: pointer; }
+.house-toggle input { width: 18px; height: 18px; accent-color: var(--gold); }
 .sheet-list { font-size: 15px; color: #cfc3b0; margin: 0 0 12px; }
 .sheet-list b {
   display: block; font-family: var(--display); font-size: 11px; letter-spacing: .12em;

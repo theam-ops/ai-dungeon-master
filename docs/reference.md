@@ -550,6 +550,8 @@ renamed export still imports.
 | A picture's caption | Tap it to write a real description, or move it to another shelf |
 | Portrait / Scene art | In the sheet drawer: upload, link, or generate |
 | Notes for the DM | In the sheet drawer: standing details about your own character |
+| Table rules | In the drawer, under Table: optional rules for the whole table |
+| Spell slots | On the dashboard, for casters: a pip per slot, filled while it is unspent |
 | Dashboard | Your sheet beside the story on a wide screen; tabs below the topbar on a phone |
 | Story / Sheet / Skills / Party | The play tabs, on a narrow screen only |
 | ★ (top right) | The drawer: You, Art, Table |
@@ -599,7 +601,7 @@ Remove a document any time from the same panel.
 
 ## How it works
 
-The DM has four tools that run on every campaign, and all of them execute locally:
+The DM has six tools that run on every campaign, and all of them execute locally:
 
 - **`roll_dice`** — the model never states a result it didn't roll. It sets the DC out
   loud first, then the number comes from Python's RNG, so it can't quietly decide you
@@ -616,6 +618,22 @@ The DM has four tools that run on every campaign, and all of them execute locall
   Faith* or *Mage Armor*, which run out by themselves. The dashboard shows the working
   under the number — `chain mail 16 · DEX +0 · shield +2` — and the DM is handed the
   same line, so it quotes AC rather than adding it up. Sell the chain mail and AC drops.
+- **`use_spell_slot` and `long_rest`** — a spell of 1st level or higher spends a slot,
+  from the SRD tables for that class and level, and the DM must spend it *before* it
+  narrates the spell. When there is none left the slot is refused, the spell does not
+  happen, and the whole table sees why. A long rest brings back hit points and slots.
+
+**What you carry is counted.** Five rations are five rations: eating one leaves four,
+rather than the DM rewriting a line of text. Gear the rules know has its SRD weight, and
+the items card shows the load against what your Strength can carry (STR × 15 lb).
+Something the DM invents — a letter, a strange key — is carried but not weighed, because
+a weight nobody decided is a number this game will not make up.
+
+**Table rules** (in the drawer, under Table) are optional rules the whole table shares.
+The first is *variant encumbrance*: past STR × 5 lb you lose 10 ft of speed, past STR × 10
+you lose 20 ft and roll STR, DEX and CON checks, attacks and saves at disadvantage. Off,
+only the carrying limit applies. Anyone at the table can change it, and the feed says who
+did.
 
 Two more appear only when there is something behind them — a tool with nothing behind
 it is worse than no tool, because the model reaches for it anyway:

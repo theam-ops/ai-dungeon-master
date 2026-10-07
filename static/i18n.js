@@ -206,6 +206,24 @@ const STRINGS = {
     ch_cond_rm: "cured: {0}",
     ch_level: "Level {0}! max HP {1}",
     ch_ac: "AC {0} → {1}",
+    ch_item_rm_left: "− {0}, {1} left",
+    ch_slot: "level {0} spell slot ({1} of {2} left)",
+    ch_slot_spell: "{0}: level {1} spell slot ({2} of {3} left)",
+    ch_slot_none: "no level {0} spell slot left — the spell is not cast",
+    ch_rest: "long rest: hit points and spell slots restored",
+    load: "{0} / {1} lb",
+    load_unweighed: "+{0} unweighed",
+    load_over: "over capacity",
+    load_heavy: "heavily encumbered",
+    load_enc: "encumbered",
+    spell_slots: "Spell slots",
+    slot_level: "Level {0}",
+    slots_left: "{0} of {1} left",
+    house_rules: "Table rules",
+    house_variant_enc: "Variant encumbrance",
+    house_variant_enc_hint: "Heavy loads slow you down: −10 ft past STR × 5 lb, −20 ft and disadvantage past STR × 10. Off, only the carrying limit applies.",
+    house_on: "{0} turned on {1}",
+    house_off: "{0} turned off {1}",
     ch_wear: "puts on {0}",
     ch_unwear: "takes off {0}",
     ch_fx_add: "{0}",
@@ -419,6 +437,24 @@ const STRINGS = {
     ch_cond_rm: "หายจาก: {0}",
     ch_level: "เลเวล {0}! พลังชีวิตสูงสุด {1}",
     ch_ac: "เกราะ {0} → {1}",
+    ch_item_rm_left: "− {0} เหลือ {1}",
+    ch_slot: "ช่องเวทระดับ {0} (เหลือ {1} จาก {2})",
+    ch_slot_spell: "{0}: ช่องเวทระดับ {1} (เหลือ {2} จาก {3})",
+    ch_slot_none: "ไม่มีช่องเวทระดับ {0} เหลือแล้ว — เวทไม่ได้ร่ายออกไป",
+    ch_rest: "พักยาว: พลังชีวิตและช่องเวทฟื้นคืน",
+    load: "{0} / {1} ปอนด์",
+    load_unweighed: "+{0} ไม่ได้ชั่ง",
+    load_over: "เกินกำลังแบก",
+    load_heavy: "แบกหนักมาก",
+    load_enc: "แบกหนัก",
+    spell_slots: "ช่องเวท",
+    slot_level: "ระดับ {0}",
+    slots_left: "เหลือ {0} จาก {1}",
+    house_rules: "กติกาประจำโต๊ะ",
+    house_variant_enc: "กติกาน้ำหนักแบบละเอียด",
+    house_variant_enc_hint: "ของหนักทำให้ช้าลง: −10 ฟุต เมื่อเกิน STR × 5 ปอนด์, −20 ฟุตและเสียเปรียบเมื่อเกิน STR × 10 ถ้าปิดไว้ จะใช้แค่ขีดจำกัดการแบก",
+    house_on: "{0} เปิด{1}",
+    house_off: "{0} ปิด{1}",
     ch_wear: "สวม {0}",
     ch_unwear: "ถอด {0}",
     ch_fx_add: "{0}",
@@ -499,7 +535,7 @@ function renderChange(c) {
     case "gold":   return c.delta >= 0 ? t("ch_gold_gain", c.delta)
                                        : t("ch_gold_spend", Math.abs(c.delta));
     case "item+":  return t("ch_item_add", c.item);
-    case "item-":  return t("ch_item_rm", c.item);
+    case "item-":  return c.left ? t("ch_item_rm_left", c.item, c.left) : t("ch_item_rm", c.item);
     case "cond+":  return t("ch_cond_add", c.cond);
     case "cond-":  return t("ch_cond_rm", c.cond);
     case "level":  return t("ch_level", c.level, c.max);
@@ -508,6 +544,10 @@ function renderChange(c) {
     case "unwear": return t("ch_unwear", c.item);
     case "fx+":    return c.turns ? t("ch_fx_add_for", c.name, c.turns) : t("ch_fx_add", c.name);
     case "fx-":    return t("ch_fx_rm", c.name);
+    case "slot":   return c.spell ? t("ch_slot_spell", c.spell, c.level, c.left, c.max)
+                                  : t("ch_slot", c.level, c.left, c.max);
+    case "slot-none": return t("ch_slot_none", c.level);
+    case "rest":   return t("ch_rest");
     default:       return "";
   }
 }

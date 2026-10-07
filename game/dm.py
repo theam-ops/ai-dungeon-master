@@ -47,6 +47,15 @@ HOW YOU RUN THE RULES
   or takes off armour or a shield, call equip_armor. For a spell or circumstance that changes
   defence - Shield of Faith, Mage Armor, half cover - call set_effect, and end it when it ends.
   Armour must be carried before it can be worn: add it with update_character first.
+- Item counts are real: "rations (5)" is five rations. When something is used up or lost, remove
+  it with update_character - "torch" takes one, "arrows (3)" takes three. Write a count when you
+  hand over several: "arrows (20)".
+- `carrying` is weight against what they can carry. If it says ENCUMBERED or OVER CAPACITY, the
+  penalty it names is real - apply it to movement and rolls.
+- A spell of 1st level or higher spends a slot: call use_spell_slot before you narrate it. If the
+  slot is refused, the spell does not happen - narrate reaching for power that is not there.
+  Cantrips cost nothing. `spell_slots` shows what each caster has left.
+- A long rest (eight uninterrupted hours) restores hit points and spell slots: call long_rest.
 - Call update_character for every HP, XP, gold, item, or condition change, naming the character
   it applies to. The tool result is the truth; if it contradicts what you just narrated, correct
   yourself in the next line.
@@ -120,9 +129,11 @@ TOOLS = [
                 "xp_gain": {"type": "integer", "description": "XP awarded. 0 if none."},
                 "gold_change": {"type": "integer", "description": "Gold gained or spent. 0 if none."},
                 "add_items": {"type": "array", "items": {"type": "string"},
-                              "description": "Items gained."},
+                              "description": "Items gained. Several of one thing: "
+                                             "'arrows (20)'."},
                 "remove_items": {"type": "array", "items": {"type": "string"},
-                                 "description": "Items consumed or lost."},
+                                 "description": "Items used up or lost. 'torch' takes "
+                                                "one; 'rations (2)' takes two."},
                 "add_conditions": {"type": "array", "items": {"type": "string"},
                                    "description": "e.g. 'poisoned', 'prone'."},
                 "remove_conditions": {"type": "array", "items": {"type": "string"},
@@ -198,7 +209,48 @@ EFFECT_TOOL = {
     },
 }
 
-TOOLS.extend([EQUIP_TOOL, EFFECT_TOOL])
+SLOT_TOOL = {
+    "name": "use_spell_slot",
+    "description": (
+        "Spend a spell slot when a character casts a spell of 1st level or higher - "
+        "before you narrate the spell. Refused when they have no slot of that level "
+        "left; then the spell does not happen. Cantrips need no call."
+    ),
+    "strict": True,
+    "input_schema": {
+        "type": "object",
+        "properties": {
+            "character_name": {"type": "string"},
+            "level": {"type": "integer",
+                      "description": "The slot's level, 1-9 - higher than the spell's "
+                                     "own level when they upcast it."},
+            "spell": {"type": "string", "description": "What they are casting."},
+        },
+        "required": ["character_name", "level", "spell"],
+        "additionalProperties": False,
+    },
+}
+
+REST_TOOL = {
+    "name": "long_rest",
+    "description": (
+        "Eight uninterrupted hours of rest: hit points return to full, spell slots "
+        "come back, and effects with a duration wear off. Not for a short breather."
+    ),
+    "strict": True,
+    "input_schema": {
+        "type": "object",
+        "properties": {
+            "character_names": {"type": "array", "items": {"type": "string"},
+                                "description": "Who rests. Empty for the whole party."},
+            "reason": {"type": "string"},
+        },
+        "required": ["character_names", "reason"],
+        "additionalProperties": False,
+    },
+}
+
+TOOLS.extend([EQUIP_TOOL, EFFECT_TOOL, SLOT_TOOL, REST_TOOL])
 
 # Only offered to the DM when the campaign has documents to search - a tool with nothing
 # behind it is worse than no tool, because the model will still reach for it.
@@ -313,7 +365,53 @@ async def _draw_scene(args, cid, repo):
              "caption": (args.get("caption") or "").strip()[:200]})
 
 
-def _defence(name, args, characters, lang):
+def _spend_slot(args, characters, lang, house):
+    """use_spell_slot. A refusal is a result, not an error: the spell does not happen,
+    and the table is shown why, so nobody has to take the DM's word for it."""
+    ch = _find(characters, args.get("character_name"))
+    if ch is None:
+        known = ", ".join(c["name"] for c in characters)
+        return f"ERROR: no character named {args.get('character_name')!r}. Party: {known}", None
+    level = args.get("level")
+    ok, message = rules.use_slot(ch, level)
+    spell = (args.get("spell") or "").strip()[:60]
+    if not ok:
+        return (f"REFUSED: {message} The spell is not cast.",
+                {"kind": "sheet", "character": ch["name"], "summary": message,
+                 "changes": [{"t": "slot-none", "level": level, "spell": spell}]})
+    left, top = rules.slots_left(ch)[int(level)]
+    return (f"{message}\nParty state: {rules.state_block(characters, lang, house)}",
+            {"kind": "sheet", "character": ch["name"], "summary": message,
+             "changes": [{"t": "slot", "level": int(level), "left": left, "max": top,
+                          "spell": spell}]})
+
+
+def _long_rest(args, characters, lang, house):
+    """long_rest, for one character or the whole party."""
+    names = args.get("character_names") or [c["name"] for c in characters]
+    resting, missing = [], []
+    for name in names:
+        ch = _find(characters, name)
+        (resting if ch else missing).append(ch or name)
+    if not resting:
+        return f"ERROR: nobody by those names. Party: {', '.join(c['name'] for c in characters)}", None
+    lines = []
+    for ch in resting:
+        done = rules.long_rest(ch)
+        # eight hours outlast anything timed; what lasts "until ended" stays
+        ch["effects"] = [fx for fx in ch.get("effects", []) if fx.get("turns") is None]
+        rules.recompute_ac(ch)
+        lines.append(f"{ch['name']}: HP {done['hp_from']} -> {done['hp_to']}"
+                     + (f", {done['slots_restored']} spell slots back"
+                        if done["slots_restored"] else ""))
+    who = ", ".join(c["name"] for c in resting)
+    summary = "; ".join(lines) + (f" (no one called {', '.join(missing)})" if missing else "")
+    return (f"Long rest. {summary}\nParty state: {rules.state_block(characters, lang, house)}",
+            {"kind": "sheet", "character": who, "summary": summary,
+             "changes": [{"t": "rest"}]})
+
+
+def _defence(name, args, characters, lang, house=None):
     """equip_armor and set_effect: change what protects a character, then recompute.
 
     Both end the same way - AC worked out again in Python, old and new in the result,
@@ -363,12 +461,12 @@ def _defence(name, args, characters, lang):
     else:
         summary = f"{message} AC stays {after}"
     result = (f"{summary} ({rules.ac_summary(ch)})\n"
-              f"Party state: {rules.state_block(characters, lang)}")
+              f"Party state: {rules.state_block(characters, lang, house)}")
     return result, {"kind": "sheet", "character": ch["name"], "summary": summary,
                     "changes": changes}
 
 
-async def run_tool(name, args, characters, lang="en", cid=None, repo=None):
+async def run_tool(name, args, characters, lang="en", cid=None, repo=None, house=None):
     """Execute a DM tool call. Returns (tool_result_text, event_or_None).
 
     `repo` is needed only by the tools that read campaign storage - the library and
@@ -399,7 +497,11 @@ async def run_tool(name, args, characters, lang="en", cid=None, repo=None):
                  "total": total, "crit": crit})
 
     if name in ("equip_armor", "set_effect"):
-        return _defence(name, args, characters, lang)
+        return _defence(name, args, characters, lang, house)
+    if name == "use_spell_slot":
+        return _spend_slot(args, characters, lang, house)
+    if name == "long_rest":
+        return _long_rest(args, characters, lang, house)
 
     if name != "update_character":
         return f"ERROR: unknown tool {name}", None
@@ -435,18 +537,23 @@ async def run_tool(name, args, characters, lang="en", cid=None, repo=None):
         log.append(f"GP {ch['gold']}")
         changes.append({"t": "gold", "delta": delta, "total": ch["gold"]})
 
-    for item in args.get("add_items") or []:
-        ch["inventory"].append(item)
-        log.append(f"+ {item}")
-        changes.append({"t": "item+", "item": item})
-    for item in args.get("remove_items") or []:
-        match = next((i for i in ch["inventory"] if i.lower() == item.lower()), None)
-        if match:
-            ch["inventory"].remove(match)
-            log.append(f"- {match}")
-            changes.append({"t": "item-", "item": match})
-        else:
-            log.append(f"(not carried: {item})")
+    for text in args.get("add_items") or []:
+        name, qty = rules.add_item(ch, text)
+        if not name:
+            continue
+        label = name if qty == 1 else f"{name} ({qty})"
+        log.append(f"+ {label}")
+        changes.append({"t": "item+", "item": label})
+    for text in args.get("remove_items") or []:
+        wanted = rules.split_qty(text)[1]
+        name, gone, left = rules.remove_item(ch, text)
+        if not name:
+            log.append(f"(not carried: {text})")
+            continue
+        label = name if gone == 1 else f"{name} ({gone})"
+        note = f" (only had {gone})" if gone < wanted else ""
+        log.append(f"- {label}{note}" + (f", {left} left" if left else ", none left"))
+        changes.append({"t": "item-", "item": label, "left": left})
 
     for cond in args.get("add_conditions") or []:
         if cond not in ch["conditions"]:
@@ -475,12 +582,12 @@ async def run_tool(name, args, characters, lang="en", cid=None, repo=None):
         changes.append({"t": "ac", "from": ac_before, "to": ac_after})
 
     summary = "; ".join(log) or "no change"
-    result = f"{summary}\nParty state: {rules.state_block(characters, lang)}"
+    result = f"{summary}\nParty state: {rules.state_block(characters, lang, house)}"
     return result, {"kind": "sheet", "character": ch["name"], "summary": summary,
                     "changes": changes}
 
 
-def build_prompt(characters, actor, action, lang="en"):
+def build_prompt(characters, actor, action, lang="en", house=None):
     """One player turn, labelled so the DM knows who acted.
 
     The acting player's standing notes ride here, in the turn itself, rather than in
@@ -496,7 +603,7 @@ def build_prompt(characters, actor, action, lang="en"):
     if acting and (acting.get("notes") or "").strip():
         notes = (f'<player_notes character="{acting["name"]}">'
                  f'{acting["notes"].strip()}</player_notes>\n\n')
-    return (f"<party_state>{rules.state_block(characters, lang)}</party_state>\n\n"
+    return (f"<party_state>{rules.state_block(characters, lang, house)}</party_state>\n\n"
             f"{notes}{who} {action}")
 
 
@@ -520,13 +627,14 @@ async def system_blocks(lang, cid=None, repo=None):
     return blocks
 
 
-async def _run(backend, history, characters, lang, images=None, cid=None, repo=None):
+async def _run(backend, history, characters, lang, images=None, cid=None, repo=None,
+               house=None):
     """Drive one backend through a turn's tool rounds. Raises to trigger failover."""
     system = await system_blocks(lang, cid, repo)
     tools = await tools_for(cid, repo)
 
     async def call_tool(name, args):
-        return await run_tool(name, args, characters, lang, cid, repo)
+        return await run_tool(name, args, characters, lang, cid, repo, house)
 
     # a backend that owns its own tool loop (Claude Code, running on a subscription)
     # runs the whole turn itself and yields the same events this loop would. It is
@@ -582,7 +690,7 @@ async def _run(backend, history, characters, lang, images=None, cid=None, repo=N
 
 
 async def take_turn(history, characters, actor, action, lang="en", backend_id=None,
-                    images=None, cid=None, repo=None):
+                    images=None, cid=None, repo=None, house=None):
     """Run one DM turn. Async generator of events; mutates history and characters.
 
     Yields {"kind": "delta"|"narration"|"dice"|"sheet"|"draw"|"switch"|"error", ...}.
@@ -594,7 +702,8 @@ async def take_turn(history, characters, actor, action, lang="en", backend_id=No
     configured one and emits a "switch" event naming who took over.
     """
     lang = i18n.normalise(lang)
-    history.append({"role": "user", "content": build_prompt(characters, actor, action, lang)})
+    history.append({"role": "user",
+                    "content": build_prompt(characters, actor, action, lang, house)})
     mark = len(history)
     images = images or []
 
@@ -615,7 +724,7 @@ async def take_turn(history, characters, actor, action, lang="en", backend_id=No
             # a backend that can't see images still gets the caption in the prompt
             usable = images if getattr(backend, "vision", False) else None
             async for event in _run(backend, history, characters, lang, usable, cid,
-                                    repo):
+                                    repo, house):
                 yield event
             if i:
                 yield {"kind": "backend", "backend": backend.id}   # persist the switch

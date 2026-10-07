@@ -32,6 +32,7 @@ CREATE TABLE IF NOT EXISTS campaigns (
     name        TEXT NOT NULL,
     lang        TEXT NOT NULL DEFAULT 'en',
     backend     TEXT NOT NULL DEFAULT '',
+    house       TEXT NOT NULL DEFAULT '{}',
     history     TEXT NOT NULL DEFAULT '[]',
     last_art    REAL NOT NULL DEFAULT 0,
     created_at  REAL NOT NULL,
@@ -149,6 +150,8 @@ def _migrate(conn):
         conn.execute("ALTER TABLE campaigns ADD COLUMN lang TEXT NOT NULL DEFAULT 'en'")
     if "backend" not in cols:
         conn.execute("ALTER TABLE campaigns ADD COLUMN backend TEXT NOT NULL DEFAULT ''")
+    if "house" not in cols:
+        conn.execute("ALTER TABLE campaigns ADD COLUMN house TEXT NOT NULL DEFAULT '{}'")
     if "last_art" not in cols:
         conn.execute("ALTER TABLE campaigns ADD COLUMN last_art REAL NOT NULL DEFAULT 0")
     chcols = {r["name"] for r in conn.execute("PRAGMA table_info(characters)")}
@@ -193,6 +196,24 @@ def campaign_lang(cid):
 def campaign_backend(cid):
     row = db().execute("SELECT backend FROM campaigns WHERE id=?", (cid,)).fetchone()
     return (row["backend"] if row else "") or ""
+
+
+def campaign_house(cid):
+    """This campaign's optional rules, every known one present."""
+    row = db().execute("SELECT house FROM campaigns WHERE id=?", (cid,)).fetchone()
+    try:
+        return rules.clean_house(json.loads(row["house"]) if row else {})
+    except (TypeError, ValueError):
+        return rules.clean_house({})
+
+
+def set_campaign_house(cid, house):
+    clean = rules.clean_house(house)
+    conn = db()
+    conn.execute("UPDATE campaigns SET house=?, updated_at=? WHERE id=?",
+                 (json.dumps(clean), time.time(), cid))
+    conn.commit()
+    return clean
 
 
 def set_campaign_backend(cid, backend):
@@ -336,9 +357,16 @@ def party(cid):
         rules.ensure_skills(ch)
         # likewise armour: AC is derived now, so a character saved under the old frozen
         # formula is put in its starting armour and recomputed on first load
+        rules.ensure_items(ch)
         rules.ensure_equipment(ch)
         rules.recompute_ac(ch)
         out.append(ch)
+    # what the sheet shows beside the numbers: load against capacity under this table's
+    # rules, and what a caster has left - derived on every read, like AC
+    variant = campaign_house(cid)["variant_encumbrance"] if out else False
+    for ch in out:
+        ch["load"] = rules.encumbrance(ch, variant)
+        ch["slots"] = {str(l): [left, top] for l, (left, top) in rules.slots_left(ch).items()}
     return out
 
 
@@ -539,7 +567,8 @@ def export_campaign(cid):
     return {
         "format": "ai-dm-campaign/1",
         "campaign": {"name": c["name"], "code": c["code"], "lang": c["lang"] or "en",
-                     "backend": c["backend"] or "", "history": json.loads(c["history"])},
+                     "backend": c["backend"] or "", "history": json.loads(c["history"]),
+                     "house": campaign_house(cid)},
         "characters": [{k: v for k, v in ch.items() if k != "_id"} for ch in party(cid)],
         "events": events_since(cid, 0, limit=100000),
         "media": [{k: v for k, v in m.items() if k not in ("campaign_id",)}
@@ -603,10 +632,10 @@ def import_campaign(blob):
         code = new_code()
 
     conn.execute(
-        "INSERT INTO campaigns (id, code, name, lang, backend, history, created_at,"
-        " updated_at) VALUES (?,?,?,?,?,?,?,?)",
+        "INSERT INTO campaigns (id, code, name, lang, backend, house, history, created_at,"
+        " updated_at) VALUES (?,?,?,?,?,?,?,?,?)",
         (cid, code, meta.get("name", "Imported campaign"), meta.get("lang", "en"),
-         meta.get("backend", ""),
+         meta.get("backend", ""), json.dumps(rules.clean_house(meta.get("house"))),
          json.dumps(history, ensure_ascii=False), now, now))
 
     # media first: characters reference their portrait by id

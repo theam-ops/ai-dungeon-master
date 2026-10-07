@@ -27,7 +27,8 @@ def test_a_whole_campaign(app_client):
     # the always-on set: no lore without documents, no drawing without an artist - but
     # armour is always there, since AC is derived from it in every campaign
     assert {t["name"] for t in first["tools"]} == {
-        "roll_dice", "update_character", "equip_armor", "set_effect"}
+        "roll_dice", "update_character", "equip_armor", "set_effect",
+        "use_spell_slot", "long_rest"}
     assert "Vess" in first["messages"][0]["content"]
 
     # -- a turn with a roll and damage -------------------------------------- #

@@ -148,6 +148,11 @@ class Repository(ABC):
     @abstractmethod
     async def set_campaign_backend(self, cid, backend): ...
     @abstractmethod
+    async def campaign_house(self, cid):
+        """The campaign's optional rules: every key of `rules.HOUSE_RULES`, as booleans."""
+    @abstractmethod
+    async def set_campaign_house(self, cid, house): ...
+    @abstractmethod
     async def delete_campaign(self, cid): ...
 
     # -- characters ---------------------------------------------------------- #

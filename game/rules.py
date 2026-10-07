@@ -206,16 +206,17 @@ def armour_piece(text):
 
 
 def _carried(ch, item):
-    """The inventory entry that `item` refers to, matched by name or by what it is."""
-    want = str(item or "").strip().lower()
-    for entry in ch.get("inventory", []):
-        if entry.strip().lower() == want:
-            return entry
+    """The carried item's name that `item` refers to, matched by name or by what it is."""
+    names = [i["name"] for i in ensure_items(ch)["items"]]
+    want = _norm(item)
+    for name in names:
+        if _norm(name) == want:
+            return name
     piece = armour_piece(item)
     if piece:
-        for entry in ch.get("inventory", []):
-            if armour_piece(entry) == piece:
-                return entry
+        for name in names:
+            if armour_piece(name) == piece:
+                return name
     return None
 
 
@@ -228,10 +229,10 @@ def ensure_equipment(ch):
     """
     if not isinstance(ch.get("equipment"), dict):
         worn = {"armor": None, "shield": None}
-        for entry in ch.get("inventory", []):
-            piece = armour_piece(entry)
+        for item in ensure_items(ch)["items"]:
+            piece = armour_piece(item["name"])
             if piece and worn[piece[0]] is None:
-                worn[piece[0]] = entry
+                worn[piece[0]] = item["name"]
         ch["equipment"] = worn
     ch["equipment"].setdefault("armor", None)
     ch["equipment"].setdefault("shield", None)
@@ -358,11 +359,11 @@ def reconcile_equipment(ch):
     update_character; without this, the AC it gave would quietly stay behind.
     """
     ensure_equipment(ch)
-    carried = {e.strip().lower() for e in ch.get("inventory", [])}
+    carried = {_norm(i["name"]) for i in ensure_items(ch)["items"]}
     gone = []
     for slot in ("armor", "shield"):
         worn = ch["equipment"].get(slot)
-        if worn and worn.strip().lower() not in carried:
+        if worn and _norm(worn) not in carried:
             ch["equipment"][slot] = None
             gone.append(worn)
     return gone
@@ -419,6 +420,310 @@ def tick_effects(ch):
     return expired
 
 
+# --------------------------------------------------------------------------- #
+# items
+# --------------------------------------------------------------------------- #
+#
+# `ch["items"]` is what a character carries: records of {name, key, qty}. `name` is the
+# item as the sheet spells it - in the campaign's language, or however the DM wrote it.
+# `key` is the English rules name when the item is one the rules know ("chain mail",
+# "rations"), and None when it is not ("a rusty key", "Aria's letter"). `qty` is real:
+# eating a ration takes one away instead of rewriting "rations (5)" as "rations (4)".
+#
+# `ch["inventory"]` - the plain list of strings every older reader expects - is derived
+# from the records by `sync_inventory` after every change, and never written to directly.
+
+# SRD weights, in pounds. Only what the game itself hands out, plus armour. Anything the
+# DM invents is carried but unweighed: a weight nobody decided is exactly the kind of
+# number this project refuses to make up.
+WEIGHTS = {
+    # weapons
+    "longsword": 3, "shortsword": 2, "two shortswords": 4, "quarterstaff": 4,
+    "mace": 4, "rapier": 2, "shortbow": 2, "longbow": 2,
+    # armour and shields
+    "padded armor": 8, "leather armor": 10, "studded leather armor": 13,
+    "hide armor": 12, "chain shirt": 20, "scale mail": 45, "breastplate": 20,
+    "half plate armor": 40, "ring mail": 40, "chain mail": 55, "splint armor": 60,
+    "plate armor": 65, "shield": 6,
+    # gear
+    "explorer's pack": 59, "scholar's pack": 10, "diplomat's pack": 36,
+    "spellbook": 3, "component pouch": 2, "thieves' tools": 1, "holy symbol": 1,
+    "hunting trap": 25, "lute": 2, "rations": 2, "torch": 1, "waterskin": 5,
+}
+
+# "rations (5)", "arrows x20", "arrows ×20" - the count the sheet has always used
+QTY_RE = re.compile(r"^(.*?)\s*(?:\((\d+)\)|[x×]\s*(\d+))\s*$", re.I)
+
+
+def _norm(text):
+    return " ".join(str(text or "").lower().replace("armour", "armor").split())
+
+
+def split_qty(text):
+    """'rations (5)' -> ('rations', 5). Anything without a count is one of it."""
+    text = " ".join(str(text or "").split())
+    m = QTY_RE.match(text)
+    if m and m.group(1):
+        return m.group(1).strip(), max(1, int(m.group(2) or m.group(3)))
+    return text, 1
+
+
+def item_key(name):
+    """The rules' English name for an item, or None if the rules do not know it."""
+    base = _norm(split_qty(name)[0])
+    base = _GEAR_NAMES.get(base, base)
+    if base in WEIGHTS:
+        return base
+    piece = armour_piece(base)
+    return piece[1] if piece else None
+
+
+def shown(item):
+    """How one record reads on the sheet: 'torch', 'rations (5)'."""
+    return item["name"] if item["qty"] == 1 else f"{item['name']} ({item['qty']})"
+
+
+def sync_inventory(ch):
+    """Rewrite the derived string list from the records."""
+    ch["inventory"] = [shown(item) for item in ch["items"]]
+    return ch
+
+
+def _find_item(ch, name):
+    """The record `name` refers to: by its spelling first, then by what it is - so the DM
+    saying 'torch' finds the 'คบไฟ' a Thai sheet carries."""
+    want = _norm(split_qty(name)[0])
+    for item in ch["items"]:
+        if _norm(item["name"]) == want:
+            return item
+    key = item_key(name)
+    if key:
+        for item in ch["items"]:
+            if item["key"] == key:
+                return item
+    return None
+
+
+def ensure_items(ch):
+    """Turn a character that predates item records into one that has them.
+
+    Older saves hold display strings - in the campaign's language, counts and all
+    ("เสบียง (5)") - so the count is split off and the name mapped back to a rules key
+    through the translation table. Anything unrecognised survives as itself with no key:
+    losing somebody's loot to a refactor is not an acceptable price for tidiness.
+    Never rebuilds records that are already there.
+    """
+    if not isinstance(ch.get("items"), list):
+        ch["items"] = []
+        for entry in ch.get("inventory", []):
+            name, qty = split_qty(entry)
+            if not name:
+                continue
+            existing = _find_item(ch, name)
+            if existing and _norm(existing["name"]) == _norm(name):
+                existing["qty"] += qty
+            else:
+                ch["items"].append({"name": name, "key": item_key(name), "qty": qty})
+    for item in ch["items"]:
+        item["qty"] = max(1, int(item.get("qty") or 1))
+        item.setdefault("key", item_key(item["name"]))
+    return sync_inventory(ch)
+
+
+def add_item(ch, text):
+    """Pick something up. Returns (name as shown, how many)."""
+    ensure_items(ch)
+    name, qty = split_qty(text)
+    if not name:
+        return None, 0
+    existing = _find_item(ch, name)
+    if existing:
+        existing["qty"] += qty
+        name = existing["name"]
+    else:
+        ch["items"].append({"name": name, "key": item_key(name), "qty": qty})
+    sync_inventory(ch)
+    return name, qty
+
+
+def remove_item(ch, text):
+    """Use up, lose or hand over something. Returns (name, how many went, how many left),
+    or (None, 0, 0) if the character is not carrying it."""
+    ensure_items(ch)
+    name, qty = split_qty(text)
+    item = _find_item(ch, name)
+    if item is None:
+        return None, 0, 0
+    gone = min(qty, item["qty"])
+    item["qty"] -= gone
+    if item["qty"] <= 0:
+        ch["items"].remove(item)
+    sync_inventory(ch)
+    return item["name"], gone, max(0, item["qty"])
+
+
+def carries(ch, name):
+    """The record for `name` if the character has it."""
+    ensure_items(ch)
+    return _find_item(ch, name)
+
+
+# --------------------------------------------------------------------------- #
+# encumbrance
+# --------------------------------------------------------------------------- #
+
+# Optional rules a table can turn on. Each is off unless the campaign says otherwise, and
+# anything not listed here is dropped on the way in rather than stored.
+HOUSE_RULES = {
+    "variant_encumbrance": False,     # slower past STR x 5, worse past STR x 10
+}
+
+
+def clean_house(house):
+    """Only known house rules, as booleans."""
+    house = house if isinstance(house, dict) else {}
+    return {k: bool(house.get(k, default)) for k, default in HOUSE_RULES.items()}
+
+
+def encumbrance(ch, variant=False):
+    """How much is carried against what the character can carry.
+
+    The SRD rule is a single line: capacity is STR x 15 lb. The variant - slower past
+    STR x 5, slower still and at a disadvantage past STR x 10 - is a table's choice, so
+    it is only applied when the campaign has turned it on.
+    """
+    ensure_items(ch)
+    strength = ch["abilities"]["STR"]
+    carried = sum(WEIGHTS[i["key"]] * i["qty"] for i in ch["items"] if i["key"] in WEIGHTS)
+    unweighed = sum(1 for i in ch["items"] if i["key"] not in WEIGHTS)
+    out = {"carried": carried, "capacity": strength * 15, "unweighed": unweighed,
+           "status": None, "speed_penalty": 0, "disadvantage": False}
+    if carried > strength * 15:
+        out.update(status="over capacity", speed_penalty=None)
+    elif variant and carried > strength * 10:
+        out.update(status="heavily encumbered", speed_penalty=20, disadvantage=True)
+    elif variant and carried > strength * 5:
+        out.update(status="encumbered", speed_penalty=10)
+    return out
+
+
+def encumbrance_line(ch, variant=False):
+    """For the DM: '139 of 225 lb' plus whatever it costs them."""
+    e = encumbrance(ch, variant)
+    line = f"{e['carried']} of {e['capacity']} lb"
+    if e["unweighed"]:
+        line += f" (+{e['unweighed']} unweighed item{'s' if e['unweighed'] > 1 else ''})"
+    if e["status"] == "over capacity":
+        line += " - OVER CAPACITY: can only push or drag, speed 5 ft"
+    elif e["status"] == "heavily encumbered":
+        line += (" - HEAVILY ENCUMBERED: speed -20 ft, disadvantage on STR, DEX and CON "
+                 "checks, attacks and saves")
+    elif e["status"] == "encumbered":
+        line += " - ENCUMBERED: speed -10 ft"
+    return line
+
+
+# --------------------------------------------------------------------------- #
+# spell slots
+# --------------------------------------------------------------------------- #
+#
+# SRD 5.1 tables. Row n is character level n+1; column m is spell level m+1. Only the
+# maximum is a table lookup - `ch["slots_used"]` records what has been spent, so a
+# level-up raises the ceiling without anyone touching the sheet.
+
+FULL_CASTER = [
+    [2], [3], [4, 2], [4, 3], [4, 3, 2], [4, 3, 3], [4, 3, 3, 1], [4, 3, 3, 2],
+    [4, 3, 3, 3, 1], [4, 3, 3, 3, 2], [4, 3, 3, 3, 2, 1], [4, 3, 3, 3, 2, 1],
+    [4, 3, 3, 3, 2, 1, 1], [4, 3, 3, 3, 2, 1, 1], [4, 3, 3, 3, 2, 1, 1, 1],
+    [4, 3, 3, 3, 2, 1, 1, 1], [4, 3, 3, 3, 2, 1, 1, 1, 1], [4, 3, 3, 3, 3, 1, 1, 1, 1],
+    [4, 3, 3, 3, 3, 2, 1, 1, 1], [4, 3, 3, 3, 3, 2, 2, 1, 1],
+]
+HALF_CASTER = [   # SRD 5.1: a ranger casts nothing at level 1
+    [], [2], [3], [3], [4, 2], [4, 2], [4, 3], [4, 3], [4, 3, 2], [4, 3, 2],
+    [4, 3, 3], [4, 3, 3], [4, 3, 3, 1], [4, 3, 3, 1], [4, 3, 3, 2], [4, 3, 3, 2],
+    [4, 3, 3, 3, 1], [4, 3, 3, 3, 1], [4, 3, 3, 3, 2], [4, 3, 3, 3, 2],
+]
+CASTERS = {"Wizard": FULL_CASTER, "Cleric": FULL_CASTER, "Bard": FULL_CASTER,
+           "Ranger": HALF_CASTER}
+
+ORDINAL = {1: "1st", 2: "2nd", 3: "3rd"}
+
+
+def ordinal(n):
+    return ORDINAL.get(n, f"{n}th")
+
+
+def casts_spells(ch):
+    return ch.get("class") in CASTERS
+
+
+def slot_max(ch):
+    """{spell level: slots} for this class at this level. Empty for non-casters."""
+    table = CASTERS.get(ch.get("class"))
+    if not table:
+        return {}
+    row = table[max(1, min(20, int(ch.get("level") or 1))) - 1]
+    return {level: count for level, count in enumerate(row, start=1)}
+
+
+def slots_left(ch):
+    """{spell level: (left, max)}."""
+    used = ch.get("slots_used") or {}
+    return {lvl: (max(0, top - int(used.get(str(lvl), 0))), top)
+            for lvl, top in slot_max(ch).items()}
+
+
+def use_slot(ch, level):
+    """Spend one slot of `level`. Returns (ok, message).
+
+    Refuses - and says why - when there is no such slot or none left. The refusal is
+    the mechanic: a caster who has spent everything cannot cast, however the scene
+    would like them to.
+    """
+    try:
+        level = int(level)
+    except (TypeError, ValueError):
+        return False, "say which spell level to spend, 1 to 9"
+    if not casts_spells(ch):
+        return False, f"{ch['name']} is a {ch['class']} and has no spell slots."
+    left = slots_left(ch)
+    if level < 1:
+        return False, "cantrips need no slot - just cast it."
+    if level not in left:
+        have = ", ".join(ordinal(l) for l in left) or "none yet at this level"
+        return False, (f"{ch['name']} has no {ordinal(level)}-level slots at level "
+                       f"{ch['level']} (has: {have}).")
+    remaining, top = left[level]
+    if remaining <= 0:
+        higher = [ordinal(l) for l, (r, _) in left.items() if l > level and r > 0]
+        hint = (f" They could cast it with a higher slot: {', '.join(higher)}."
+                if higher else " Every slot that could cast it is spent.")
+        return False, (f"{ch['name']} has no {ordinal(level)}-level slots left "
+                       f"(0 of {top}).{hint} A long rest restores them.")
+    used = ch.setdefault("slots_used", {})
+    used[str(level)] = int(used.get(str(level), 0)) + 1
+    return True, (f"{ch['name']} spends a {ordinal(level)}-level slot "
+                  f"({remaining - 1} of {top} left).")
+
+
+def long_rest(ch):
+    """Eight hours: hit points and spell slots come back. Returns what changed."""
+    before = ch["hp"]
+    ch["hp"] = ch["max_hp"]
+    had = {lvl: r for lvl, (r, _) in slots_left(ch).items()}
+    ch["slots_used"] = {}
+    return {"hp_from": before, "hp_to": ch["hp"],
+            "slots_restored": sum(top - had[lvl] for lvl, top in slot_max(ch).items())}
+
+
+def slots_line(ch):
+    """For the DM: '1st 3/4, 2nd 0/3'."""
+    left = slots_left(ch)
+    if not left:
+        return "none at this level" if casts_spells(ch) else None
+    return ", ".join(f"{ordinal(l)} {r}/{t}" for l, (r, t) in left.items())
+
+
 def roll_ability():
     """4d6 drop lowest."""
     d = sorted(random.randint(1, 6) for _ in range(4))
@@ -458,7 +763,9 @@ def new_character(name, race, klass, scores=None, lang="en"):
         "conditions": [],
         "skills": list(CLASS_SKILLS[klass]),
     }
-    # starting armour and shield go on, and AC is worked out from them
+    # the kit becomes item records, then starting armour and shield go on, and AC is
+    # worked out from them
+    ensure_items(ch)
     ensure_equipment(ch)
     recompute_ac(ch)
     return ch
@@ -487,13 +794,22 @@ def sheet(ch, lang="en"):
         i18n.cli("inventory", lang) + " "
         + (", ".join(ch["inventory"]) or i18n.cli("empty", lang)),
     ]
+    load = encumbrance(ch)
+    lines.append(i18n.cli("carrying", lang, load["carried"], load["capacity"])
+                 + (f"  [{load['status']}]" if load["status"] else ""))
+    if casts_spells(ch):
+        lines.append(i18n.cli("slots", lang) + " " + slots_line(ch))
     if ch["conditions"]:
         lines.append(i18n.cli("conditions", lang) + " " + ", ".join(ch["conditions"]))
     return "\n".join(lines)
 
 
-def state_block(characters, lang="en"):
-    """The party state handed to the DM each turn."""
+def state_block(characters, lang="en", house=None):
+    """The party state handed to the DM each turn.
+
+    `house` is the campaign's optional rules - today just `variant_encumbrance`.
+    """
+    variant = bool((house or {}).get("variant_encumbrance"))
     party = []
     for ch in characters:
         entry = {}
@@ -520,7 +836,9 @@ def state_block(characters, lang="en"):
             "proficiency_bonus": proficiency_bonus(ch["level"]),
             "skill_bonuses": {s: skill_modifier(ch, s)
                               for s in ch.get("skills", []) if s in SKILLS},
-            "inventory": ch["inventory"], "conditions": ch["conditions"],
+            "inventory": ensure_items(ch)["inventory"], "conditions": ch["conditions"],
+            "carrying": encumbrance_line(ch, variant),
+            **({"spell_slots": slots_line(ch)} if casts_spells(ch) else {}),
             "status": "UNCONSCIOUS AT 0 HP" if ch["hp"] == 0 else "conscious",
         })
     return json.dumps(party, ensure_ascii=False)

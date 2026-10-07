@@ -293,6 +293,8 @@ drive the rules without a web server and the CLI share the same DM.
 | `update_character` | yes | all hp/xp/gold/items/conditions, named to one character |
 | `equip_armor` | yes | carried armour or a shield on or off; AC recomputed in Python |
 | `set_effect` | yes | a named AC effect — bonus, unarmoured base, or floor — with a duration |
+| `use_spell_slot` | yes | spends a slot from the SRD table; *refuses* when none is left |
+| `long_rest` | yes | HP and slots restored, timed effects ended — one character or the party |
 | `search_lore` | only with documents | substring search over the campaign library |
 | `draw_scene` | only with an image provider | one slot per `DM_ART_EVERY_TURNS` turns |
 
@@ -467,18 +469,17 @@ Covered by `tests/test_store_threads.py`.
 **6. The schema was defined in two places.** `characters.portrait` existed only in
 `_migrate`. It is in `SCHEMA` now; `_migrate` remains for databases created before it.
 
+**7. `inventory` held localised display strings.** A Thai campaign stored `"ดาบสั้น"`,
+not `"shortsword"`, and a count lived inside the text: five rations were the string
+`"rations (5)"`. Items are now records — `{name, key, qty}` in `ch["items"]` — with the
+name as the sheet spells it and an English rules key where the rules know the item.
+`inventory` survives as a derived display list, rewritten from the records after every
+change and never written to directly. Old saves are converted on load by splitting the
+count off and mapping the name back through the translation table; anything unrecognised
+is kept as itself. Checked against every character in the live database: nothing lost.
+Covered by `tests/test_items.py`.
+
 ### Open
-
-**`inventory` holds localised display strings** — `rules.new_character`:
-
-```python
-"inventory": [i18n.gear(item, lang) for item in kit],
-```
-
-A Thai campaign stores `"ดาบสั้น"`, not `"shortsword"`. This breaks the project's own rule
-that mechanical values are stored in English and translated at display. AC works around
-it — `rules.armour_piece` recognises armour by its translated name — but a general item
-system cannot be built on these strings. See the plan's Phase 3.
 
 **Effect durations count table turns, not combat rounds.** `set_effect`'s `turns` ticks
 once per player action, because there is no initiative or round structure yet. With one

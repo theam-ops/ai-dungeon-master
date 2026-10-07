@@ -503,6 +503,7 @@ async def campaign_detail(request: Request, cid: str):
         "you": me["name"],
         "notes": me.get("notes", ""),        # your own standing notes, nobody else's
         "notes_max": rules.MAX_NOTES_CHARS,
+        "house": await A.repo.campaign_house(cid),
         "party": [public_character(c) for c in await A.repo.party(cid)],
         "last_seq": await A.repo.last_seq(cid),
         "started": bool(await A.repo.get_history(cid)),
@@ -536,6 +537,20 @@ async def replay(cid, since):
         for event in batch:
             yield event
         since = batch[-1]["seq"]
+
+
+@app.post("/api/campaigns/{cid}/house")
+async def set_house(request: Request, cid: str, body: dict = Body(...)):
+    """Turn the table's optional rules on or off. Anyone seated may: it is a table's
+    decision, like a house rule at a real one, and every change is shown to everyone."""
+    _, _, me = await require_member(request, cid)
+    before = await A.repo.campaign_house(cid)
+    house = await A.repo.set_campaign_house(cid, {**before, **(body or {})})
+    changed = {k: v for k, v in house.items() if before.get(k) != v}
+    if changed:
+        await publish(cid, "house", {"character": me["name"], "changed": changed})
+        await broadcast(cid, await party_payload(cid))
+    return {"house": house}
 
 
 @app.get("/api/campaigns/{cid}/events")

@@ -77,6 +77,20 @@ they have just picked it up. `--ac-base` replaces the unarmoured base and does n
 while armour is worn; `--ac-min` is a floor (barkskin: 16). Removing worn armour with
 `--remove` takes it off, and AC drops with it.
 
+**Counts are real.** `--add "arrows (20)"` gives twenty; `--remove torch` takes one,
+`--remove "rations (2)"` two. The sheet shows what the load weighs against capacity.
+
+**Spell slots are spent, not remembered.** Before narrating a spell of 1st level or
+higher, spend the slot; if it is refused, the spell does not happen:
+
+```
+python play.py update Ilse --use-slot 1
+python play.py update Ilse --use-slot 3      # upcasting: spend the higher slot
+python play.py update Ilse --long-rest       # HP and slots back; timed effects end
+```
+
+Cantrips need no slot.
+
 If the tool's output contradicts something you just narrated, correct yourself in the
 next line. The tool is the truth.
 
