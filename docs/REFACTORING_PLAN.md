@@ -33,7 +33,7 @@ Sorted by value per unit of work, not by the order the pillars were listed.
 | 2 | Port boundary (`lite` adapters only) | ~1 week | **Done.** |
 | 3 | Items as records + equipment | ~1 week | **Done.** |
 | 4 | Combat, initiative, turn queue | ~1 week | **Done.** |
-| 5 | Summarisation worker | ~4 days | Blocked on 2. **Pays for itself in tokens.** |
+| 5 | Summarisation worker | ~4 days | **Done.** 88% fewer input tokens over 200 turns. |
 | 6 | SRD retrieval | ~3 days | Cheap; `lore.py` already has the machinery. |
 | 7 | Frontend ES modules | ~1 week | Pure refactor, no behaviour change. Do before 9. |
 | 8 | Postgres + Redis adapters | ~1.5 weeks | **Only if you actually need >1 process.** |
@@ -741,6 +741,25 @@ not required for initiative to work.
 ---
 
 ## Phase 5 — context compaction
+
+> **Done.** Where it differs from the sketch below, and why:
+>
+> - **Trimming came first, and does half the work.** Every stored turn carried a full snapshot
+>   of the party; only the newest is true. `providers.trim_stale` drops the rest from what is
+>   sent — no model call, no latency, about half the tokens.
+> - **One `memory` column, not a `summaries` table.** Only the latest synopsis is ever used.
+>   It only moves forward: a slow job finishing late cannot overwrite a newer one.
+> - **Cuts land on turn boundaries.** A window that opened on a tool result whose call had
+>   been condensed away would be rejected by every API.
+> - **The window also fits the model.** Ollama's 8,192-token default is smaller than the
+>   window, so small-context backends get `fit_window`: whole turns dropped from the front.
+>   Tokens are estimated from UTF-8 bytes - characters undercount Thai badly. The first
+>   version of this crashed against Ollama; the test that now guards it would have caught it.
+> - **Claude Code's window counted messages** while its setting said turns: "40" was about
+>   ten turns. It counts turns now, and what is older reaches it as the synopsis.
+> - **The summariser never sees a party snapshot**, even the last one in its stretch -
+>   nothing in a stretch of old turns is current.
+> - **Players can read it**: the drawer's Table tab shows the story so far.
 
 **The phase with the clearest financial return.** `campaigns.history` is one TEXT column
 holding the entire transcript; every turn reads it whole, sends most of it to the model, and

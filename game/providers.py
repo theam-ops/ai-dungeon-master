@@ -483,6 +483,10 @@ class GroqBackend(OpenAICompatBackend):
 class OllamaBackend(Backend):
     """A model running on this machine. No key, no cost, no quota."""
 
+    # a small context: what it is sent must be fitted to it, or the model silently
+    # forgets the beginning of the request (see dm._run)
+    context_tokens = OLLAMA_CONTEXT
+
     kind = "ollama"
     vision = False      # depends entirely on the pulled model, so assume not
     key_url = "https://ollama.com/download"
@@ -842,3 +846,104 @@ def image_backend():
 
 def catalogue():
     return [b.describe() for b in BACKENDS]
+
+
+# --------------------------------------------------------------------------- #
+# what a model is sent of the history
+# --------------------------------------------------------------------------- #
+#
+# Every player prompt carries the party's whole state - sheets, AC working, load, spell
+# slots - and every sheet-changing tool result echoes it. Only the newest copy is true;
+# the older ones are snapshots of how things stood several turns ago, and they were about
+# half of every stored turn. They stay in the stored history - it is the record, and it is
+# exported whole - but they are not sent again.
+
+STALE_RE = re.compile(
+    r"<(party_state|combat|combat_note)>.*?</\1>\s*|<player_notes[^>]*>.*?</player_notes>\s*",
+    re.S)
+PARTY_STATE_MARK = "\nParty state: "
+
+
+def turn_starts(messages):
+    """Indexes where a turn begins: a user message that is a prompt, not a tool result."""
+    return [i for i, m in enumerate(messages)
+            if m.get("role") == "user" and isinstance(m.get("content"), str)]
+
+
+def trim_stale(messages, keep_current=True):
+    """The messages, with state snapshots removed from every turn but the current one.
+
+    The current turn - from the last prompt onwards - is left exactly as it is: its
+    party state is the truth the model is working from. With `keep_current=False`
+    nothing is current - a stretch of old turns being summarised - and every snapshot
+    goes. Returns new dicts; the stored history is never touched.
+    """
+    starts = turn_starts(messages)
+    current = (starts[-1] if starts else 0) if keep_current else len(messages)
+    out = []
+    for i, m in enumerate(messages):
+        content = m.get("content")
+        if i >= current or m.get("role") != "user":
+            out.append(m)
+        elif isinstance(content, str):
+            out.append({**m, "content": STALE_RE.sub("", content)})
+        elif isinstance(content, list):
+            out.append({**m, "content": [
+                {**b, "content": b["content"].split(PARTY_STATE_MARK)[0]}
+                if b.get("type") == "tool_result" and isinstance(b.get("content"), str)
+                else b
+                for b in content]})
+        else:
+            out.append(m)
+    return out
+
+
+def render_transcript(messages, keep_current=True):
+    """A stretch of history as plain text - for a backend that takes one prompt rather
+    than a message list (Claude Code), and for the summariser. Stale state is trimmed;
+    see `trim_stale` for `keep_current`."""
+    lines = []
+    for msg in trim_stale(messages, keep_current):
+        content = msg.get("content")
+        if msg["role"] == "user":
+            if isinstance(content, str):
+                lines.append(content.strip())
+            else:
+                for block in content or []:
+                    if block.get("type") == "tool_result":
+                        lines.append(f"[rules] {block.get('content', '')}")
+            continue
+        for block in content or []:
+            if block.get("type") == "text" and block.get("text", "").strip():
+                lines.append("DM: " + block["text"].strip())
+            elif block.get("type") == "tool_use":
+                lines.append(f"[DM called {block.get('name')} with {block.get('input')}]")
+    return "\n\n".join(line for line in lines if line)
+
+
+def estimate_tokens(obj):
+    """A rough token count, from UTF-8 bytes rather than characters.
+
+    Characters / 4 is the usual rule of thumb, and it is badly wrong for Thai: each Thai
+    character is three bytes and tokenises far more densely than English. Bytes / 4
+    lands close for both, and errs high - which is the safe side for a budget.
+    """
+    text = obj if isinstance(obj, str) else json.dumps(obj, ensure_ascii=False)
+    return len(text.encode("utf-8")) // 4
+
+
+def fit_window(messages, budget):
+    """Drop whole turns from the front until the messages fit `budget` tokens.
+
+    Never drops the current turn, and never cuts mid-turn - a tool result whose call
+    has been dropped is an error to every API. What falls out of the window is still
+    reachable: older turns are in the synopsis, and the people and threads are in the
+    campaign memory that search_lore reads.
+    """
+    starts = turn_starts(messages)
+    if not starts or budget <= 0:
+        return messages[starts[-1]:] if starts else messages
+    for start in starts:
+        if estimate_tokens(messages[start:]) <= budget or start == starts[-1]:
+            return messages[start:]
+    return messages

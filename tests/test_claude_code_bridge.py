@@ -52,6 +52,7 @@ class FakeClaudeCode:
         return {"name": name, "tools": dict(built)}
 
     async def query(self, prompt, options):
+        self.prompt, self.system = prompt, options.system_prompt
         self.offered = list(options.allowed_tools)
         handlers = options.mcp_servers[claude_code.MCP_SERVER]["tools"]
         for name, args in self.calls:
@@ -151,3 +152,24 @@ def test_a_sheet_change_made_through_claude_code_lands_on_the_sheet(fake_sdk):
 
     assert party[0]["hp"] == before - 3
     assert any(e["kind"] == "sheet" for e in events)
+
+
+def test_claude_code_gets_the_synopsis_and_only_the_recent_turns(fake_sdk):
+    """Claude Code used to see the last 40 *messages* - ten-odd turns - and nothing of
+    what came before. Now older turns reach it as the campaign's synopsis."""
+    sdk = fake_sdk([])
+    cid, party, repo = a_campaign()
+    history = []
+    for i in range(6):
+        history += [{"role": "user", "content": f"Vess acts: old deed {i}"},
+                    {"role": "assistant", "content": [{"type": "text", "text": f"Then {i}."}]}]
+    memory = {"upto": 8, "synopsis": "Vess robbed the toll-keeper and fled north."}
+
+    async def go():
+        return [e async for e in dm.take_turn(history, party, "Vess", "I keep running.",
+                                               "en", "claude-code", None, cid, repo=repo,
+                                               memory=memory)]
+    asyncio.run(go())
+    assert "robbed the toll-keeper" in sdk.system and "<story_so_far>" in sdk.system
+    assert "old deed 3" not in sdk.prompt                 # condensed
+    assert "old deed 4" in sdk.prompt and "I keep running." in sdk.prompt

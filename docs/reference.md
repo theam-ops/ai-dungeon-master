@@ -635,6 +635,15 @@ you lose 20 ft and roll STR, DEX and CON checks, attacks and saves at disadvanta
 only the carrying limit applies. Anyone at the table can change it, and the feed says who
 did.
 
+**The DM remembers a long campaign.** Every turn used to re-send the whole story so far,
+so a long campaign cost more with every turn and, eventually, outgrew what the model can
+read at once and stopped. Now, once about thirty turns have piled up, the cheapest AI you
+have condenses the older ones into a synopsis, and the DM is sent that plus the last twenty
+turns word for word. The names, places and open promises it found go into your campaign
+library as **Campaign memory**, where the DM can look them up. You can read the synopsis
+in the drawer, under Table, as **Story so far**. Nothing is thrown away: the full transcript
+is kept, scrolls back in the feed, and is what Export saves.
+
 **Fights have an order.** When a fight starts the DM calls for initiative and Python
 rolls it — for every character at the table and every enemy. The **Initiative** card on
 the dashboard shows the round, the order, and whose turn it is, and the DM is shown the

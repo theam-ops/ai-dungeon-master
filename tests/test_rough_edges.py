@@ -352,24 +352,6 @@ def test_a_thai_filename_becomes_a_thai_caption():
 # FOUND, NOT FIXED - pinned so a change is deliberate
 # --------------------------------------------------------------------------- #
 
-def test_known_history_grows_without_limit(app_client):
-    """Nothing truncates the campaign history sent to an API backend. Every turn
-    re-sends the whole story, so a long session's cost grows quadratically and will
-    eventually exceed the model's context. `claude_code.render_transcript` caps at 40
-    turns; no other backend does. Structural - see docs/playtest-findings.md."""
-    client, stub = app_client
-    table = new_table(client, stub)
-    table.begin("It starts.")
-    for i in range(6):
-        table.act(f"turn {i}", f"narration {i}")
-
-    sent = [len(json.dumps(c["messages"], ensure_ascii=False)) for c in stub.calls]
-    assert sent == sorted(sent)                 # every turn strictly bigger
-    assert sent[-1] > sent[0] * 3
-    # nothing is ever dropped: the request carries the whole stored campaign
-    assert len(stub.calls[-1]["messages"]) >= len(store.get_history(table.id)) - 1
-
-
 def test_known_import_bypasses_the_media_and_lore_caps(app_client):
     """Upload enforces 60 images and 40 documents. Import enforces neither, so a
     hand-edited export can seed a campaign far past both. Not fixed: the right answer

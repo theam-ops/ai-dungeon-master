@@ -12,6 +12,7 @@ import re
 
 from .. import dm, providers, rules
 from .events import broadcast, party_payload, publish
+from .memory import maybe_summarize
 
 log = logging.getLogger("dnd")
 
@@ -76,6 +77,8 @@ async def run_dm_turn(adapters, cid, actor, action, images=None, claim=None):
     try:
         async with adapters.locks.hold(turn_key(cid)):
             await _turn(adapters, cid, actor, action, images)
+        # outside the lock: condensing the story is slow, and no turn should wait on it
+        await maybe_summarize(adapters, cid)
     finally:
         if claim:
             await adapters.locks.release(claim)
@@ -87,6 +90,7 @@ async def _turn(adapters, cid, actor, action, images):
     history = await repo.get_history(cid)
     house = await repo.campaign_house(cid)
     combat = await repo.get_combat(cid)
+    memory = await repo.get_memory(cid)
 
     await broadcast(adapters, cid, {"kind": "thinking", "on": True})
     try:
@@ -95,7 +99,7 @@ async def _turn(adapters, cid, actor, action, images):
                                         await repo.campaign_backend(cid)
                                         or providers.default_id(),
                                         images, cid, repo=repo, house=house,
-                                        combat=combat):
+                                        combat=combat, memory=memory):
             kind = event.pop("kind")
             if kind == "delta":
                 await broadcast(adapters, cid, {"kind": "delta", **event})

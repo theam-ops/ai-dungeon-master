@@ -119,6 +119,7 @@ async function refreshUI() {
   if (!$("guide").classList.contains("hidden")) renderGuide();
   if (S.campaign) {
     renderLive();
+    renderRecap();
     // the count only — re-filling the box would throw away notes being typed right now
     if (!$("drawer").classList.contains("hidden")) {
       renderAI(); renderNotesCount();
@@ -1280,6 +1281,7 @@ async function enterCampaign(id) {
   S.campaign = info;
   S.combat = info.combat || null;
   renderHouse();
+  renderRecap();
   S.party = info.party;
   S.backend = info.backend;
   S.notes = info.notes || "";
@@ -1434,6 +1436,12 @@ function handle(ev) {
       renderLive();
       break;
     }
+
+    case "memory":
+      // the older turns were condensed in the background; nothing to show in the feed
+      if (S.campaign) S.campaign.memory = { synopsis: ev.synopsis, turns: ev.turns };
+      renderRecap();
+      break;
 
     case "house":
       // a table rule changed - everyone sees who, and the toggle follows
@@ -2038,6 +2046,17 @@ if (!DRAWER_TABS.includes(drawerTab)) drawerTab = "you";
 
 /* The table's optional rules. Server keys on the left, string suffixes on the right. */
 const HOUSE_KEYS = { variant_encumbrance: "variant_enc" };
+
+/* The campaign's synopsis, as the DM is given it. Text only - it came from a model. */
+function renderRecap() {
+  const box = $("recap");
+  if (!box) return;
+  const mem = S.campaign && S.campaign.memory;
+  box.textContent = mem && mem.synopsis ? mem.synopsis : "";
+  box.classList.toggle("hidden", !(mem && mem.synopsis));
+  $("recap-meta").textContent = mem && mem.synopsis
+    ? t("story_so_far_meta", mem.turns) : t("story_so_far_none");
+}
 
 function renderHouse() {
   const box = $("house-variant-enc");

@@ -194,6 +194,7 @@ erDiagram
         TEXT backend "which AI, per campaign"
         TEXT house "optional table rules, JSON"
         TEXT combat "the fight in progress, JSON, or empty"
+        TEXT memory "synopsis of turns before upto, JSON"
         TEXT history "ENTIRE transcript as JSON"
         REAL last_art "art slot refill clock"
     }
@@ -231,9 +232,12 @@ for adding a field is a **lazy default on the read path**: see `rules.ensure_ski
 called from `store.party()`, which gives characters created before skills existed their
 class defaults on first load.
 
-**`campaigns.history`** is the entire transcript as one JSON TEXT column. Every turn reads
-it whole and writes it back whole. This is the main scaling liability in the data model and
-is addressed in the [refactoring plan](docs/REFACTORING_PLAN.md).
+**`campaigns.history`** is the entire transcript as one JSON TEXT column, and it is never
+cut: it is the record, and what gets exported. What a model is *sent* is a window onto it —
+everything after `campaigns.memory.upto`, with stale party snapshots trimmed — behind a
+synopsis of the rest (`game/services/memory.py`). Every turn still reads and writes the
+column whole, which is the remaining scaling cost in the data model; moving history to rows
+is a Phase 8 question.
 
 ### Identity
 
@@ -488,6 +492,13 @@ Covered by `tests/test_items.py`.
 effect ran out five times as fast as with one. In a fight, durations now tick when a
 round ends (`dm._combat`); outside one, they still tick per player action, which is the
 only clock exploration has.
+
+**9. Every turn re-sent the whole campaign.** Requests grew with every turn, total cost with
+the square of the campaign's length, and past roughly 140 turns a request exceeded a 200K
+context and the campaign stopped. Claude Code's 40-*message* window meant it forgot all but
+the last ten-odd turns, silently. Now stale state is trimmed from what is sent, older turns
+are condensed into a synopsis in the background, small contexts are fitted, and Claude Code's
+window counts turns. Requests plateau around 16-21K tokens. Covered by `tests/test_memory.py`.
 
 ### Open
 

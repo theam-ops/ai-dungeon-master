@@ -735,6 +735,14 @@ button:disabled { opacity: .45; cursor: default; }
   border: 1px solid var(--gold-dim); border-radius: 999px; padding: 3px 12px;
 }
 
+.recap {
+  white-space: pre-wrap; overflow-wrap: anywhere;
+  font-size: 14px; line-height: var(--line-prose); color: var(--parchment);
+  background: var(--ink-3); border: 1px solid var(--edge); border-radius: 10px;
+  padding: 10px 12px; max-height: 260px; overflow-y: auto;
+  scrollbar-width: thin; scrollbar-color: var(--edge) transparent;
+}
+
 .house-toggle { display: flex; align-items: center; gap: 10px; margin: 4px 0 2px; cursor: pointer; }
 .house-toggle input { width: 18px; height: 18px; accent-color: var(--gold); }
 .sheet-list { font-size: 15px; color: #cfc3b0; margin: 0 0 12px; }

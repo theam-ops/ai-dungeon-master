@@ -21,6 +21,8 @@ Environment:
     DM_ART_EVERY_TURNS  optional - player turns between DM illustrations (default 6)
     COMBAT_TURN_GRACE   optional - seconds an idle combat turn waits before it passes
                         (default 0: never)
+    SUMMARY_KEEP_TURNS  optional - turns sent word for word after the synopsis (default 20)
+    SUMMARY_EVERY_TURNS optional - how far past that before condensing again (default 10)
 
 At least one AI must be reachable: any key above, or a running Ollama.
 """
@@ -47,6 +49,7 @@ from game import claude_code, i18n, lore, media, providers, rules
 from game.adapters import build_adapters
 from game.services import events
 from game.services.events import public_character
+from game.services.memory import summarize
 from game.services.turn import combat_nudge, run_dm_turn, turn_key
 from game.services.turn import player_safe  # noqa: F401 - re-exported; tests use it here
 
@@ -507,6 +510,8 @@ async def campaign_detail(request: Request, cid: str):
         "notes_max": rules.MAX_NOTES_CHARS,
         "house": await A.repo.campaign_house(cid),
         "combat": await A.repo.get_combat(cid),
+        "memory": {k: v for k, v in (await A.repo.get_memory(cid) or {}).items()
+                   if k in ("synopsis", "turns")} or None,
         "party": [public_character(c) for c in await A.repo.party(cid)],
         "last_seq": await A.repo.last_seq(cid),
         "started": bool(await A.repo.get_history(cid)),
@@ -1164,6 +1169,7 @@ def fresh_adapters(mode=None):
     adapters.queue.register("dm_turn", run_dm_turn)
     adapters.queue.register("illustrate", illustrate)
     adapters.queue.register("combat_nudge", combat_nudge)
+    adapters.queue.register("summarize", summarize)
     return adapters
 
 

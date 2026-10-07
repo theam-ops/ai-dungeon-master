@@ -189,25 +189,15 @@ def render_transcript(history, limit=MAX_TRANSCRIPT_TURNS):
     Claude runs out mid-campaign. So each turn is sent stateless, with the story so far
     folded into the prompt, rather than resuming a Claude Code session and letting the
     two records drift apart.
+
+    `limit` counts turns. It used to count messages - and a turn with tool calls is
+    three to five of them - so "40" quietly meant ten or so turns, and Claude forgot
+    everything before that with nothing to say it had. What is older than the window
+    now reaches it as the campaign's synopsis instead (see game/services/memory.py).
     """
-    lines = []
-    for msg in history[-limit:]:
-        content = msg.get("content")
-        if msg["role"] == "user":
-            if isinstance(content, str):
-                lines.append(content)
-            else:
-                for block in content or []:
-                    if block.get("type") == "tool_result":
-                        lines.append(f"[rules] {block.get('content', '')}")
-            continue
-        for block in content or []:
-            if block.get("type") == "text" and block.get("text", "").strip():
-                lines.append("DM: " + block["text"].strip())
-            elif block.get("type") == "tool_use":
-                lines.append(f"[DM called {block.get('name')} "
-                             f"with {block.get('input')}]")
-    return "\n\n".join(lines)
+    starts = providers.turn_starts(history)
+    begin = starts[-limit] if len(starts) > limit else 0
+    return providers.render_transcript(history[begin:])
 
 
 class ClaudeCodeBackend(providers.Backend):
@@ -313,7 +303,7 @@ class ClaudeCodeBackend(providers.Backend):
         return create_sdk_mcp_server(MCP_SERVER, "1.0.0", built)
 
     async def run_turn(self, system_blocks, history, characters, lang, images=None,
-                       cid=None, tools=(), call_tool=None):
+                       cid=None, tools=(), call_tool=None, since=0):
         """One DM turn, start to finish, yielding the same events as `dm._run`.
 
         Claude Code runs its own tool loop, so unlike `Backend.stream` this covers the
@@ -324,7 +314,8 @@ class ClaudeCodeBackend(providers.Backend):
             raise providers.ProviderFailed(f"Claude Code: {SDK_ERROR}")
 
         system = "\n\n".join(b["text"] for b in system_blocks if b.get("text"))
-        prompt = render_transcript(history)
+        # `since`: older turns are in the synopsis the system prompt carries
+        prompt = render_transcript(history[since:])
         events = asyncio.Queue()
         content, text_parts, said_anything = [], [], False
 

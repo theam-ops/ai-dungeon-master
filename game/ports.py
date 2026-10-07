@@ -157,6 +157,13 @@ class Repository(ABC):
     @abstractmethod
     async def set_campaign_house(self, cid, house): ...
     @abstractmethod
+    async def get_memory(self, cid):
+        """The campaign's condensed past - see game/services/memory.py - or None."""
+    @abstractmethod
+    async def set_memory(self, cid, memory):
+        """Store a newer memory. Must only move forwards: one covering less of the
+        history than what is stored is dropped, and the stored one returned."""
+    @abstractmethod
     async def get_combat(self, cid):
         """The fight in progress - see `rules.join_combat` for its shape - or None."""
     @abstractmethod

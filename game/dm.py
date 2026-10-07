@@ -9,6 +9,9 @@ import os
 
 from . import i18n, lore, providers, rules
 
+# tokens kept free for the model's answer when a small context is being budgeted
+REPLY_ROOM = 1000
+
 MAX_TOOL_ROUNDS = 12
 
 # How many player turns must pass between two DM-drawn pictures. Drawing costs real
@@ -754,7 +757,7 @@ def build_prompt(characters, actor, action, lang="en", house=None, combat=None):
             f"{fight}{notes}{who} {action}")
 
 
-async def system_blocks(lang, cid=None, repo=None):
+async def system_blocks(lang, cid=None, repo=None, synopsis=None):
     """Base prompt stays cached; the language instruction rides after it as its own
     block, so switching language doesn't invalidate the cached prefix.
 
@@ -773,14 +776,41 @@ async def system_blocks(lang, cid=None, repo=None):
         listing = lore.manifest(await repo.lore_documents(cid))
         if listing:
             blocks.append({"type": "text", "text": listing})
+    if synopsis:
+        # last, and cached: it changes only when the campaign is next condensed, so
+        # every turn until then reuses everything above it from the cache
+        blocks.append({"type": "text", "cache_control": {"type": "ephemeral"}, "text": (
+            "<story_so_far>\n" + synopsis.strip() + "\n</story_so_far>\n"
+            "Everything above happened earlier in this campaign, condensed. The "
+            "transcript that follows picks up from there, word for word. For a name "
+            "you do not recognise, search the campaign memory with search_lore.")})
     return blocks
 
 
 async def _run(backend, history, characters, lang, images=None, cid=None, repo=None,
-               house=None):
-    """Drive one backend through a turn's tool rounds. Raises to trigger failover."""
-    system = await system_blocks(lang, cid, repo)
+               house=None, memory=None):
+    """Drive one backend through a turn's tool rounds. Raises to trigger failover.
+
+    `history` is the whole stored campaign, and this turn appends to it. What the model
+    is sent is a window onto it: everything after the synopsis in `memory`, with stale
+    party-state snapshots trimmed from all but the current turn.
+    """
+    memory = memory or {}
+    upto = max(0, min(int(memory.get("upto", 0)), len(history)))
+    system = await system_blocks(lang, cid, repo, memory.get("synopsis"))
     tools = await tools_for(cid, repo)
+
+    # a model with a small context (a local Ollama) gets only as many recent turns as
+    # fit after the system prompt, the tool definitions - over 2,000 tokens on their
+    # own - and room for its reply
+    budget = getattr(backend, "context_tokens", None)
+    if budget:
+        budget -= (providers.estimate_tokens(system) + providers.estimate_tokens(tools)
+                   + REPLY_ROOM)
+
+    def window():
+        sent = providers.trim_stale(history[upto:])
+        return providers.fit_window(sent, budget) if budget else sent
 
     async def call_tool(name, args):
         return await run_tool(name, args, characters, lang, cid, repo, house)
@@ -791,7 +821,8 @@ async def _run(backend, history, characters, lang, images=None, cid=None, repo=N
     # module for them.
     if hasattr(backend, "run_turn"):
         async for event in backend.run_turn(system, history, characters, lang, images,
-                                            cid, tools=tools, call_tool=call_tool):
+                                            cid, tools=tools, call_tool=call_tool,
+                                            since=upto):
             yield event
         return
 
@@ -800,7 +831,7 @@ async def _run(backend, history, characters, lang, images=None, cid=None, repo=N
         # images ride the first request only; after that the model has already seen them
         # and re-sending would pay for them again on every tool round
         turn_images = images if round_no == 0 else None
-        async for chunk in backend.stream(system, history, tools, turn_images):
+        async for chunk in backend.stream(system, window(), tools, turn_images):
             if chunk["type"] == "delta":
                 yield {"kind": "delta", "text": chunk["text"]}
             else:
@@ -839,7 +870,8 @@ async def _run(backend, history, characters, lang, images=None, cid=None, repo=N
 
 
 async def take_turn(history, characters, actor, action, lang="en", backend_id=None,
-                    images=None, cid=None, repo=None, house=None, combat=None):
+                    images=None, cid=None, repo=None, house=None, combat=None,
+                    memory=None):
     """Run one DM turn. Async generator of events; mutates history and characters.
 
     Yields {"kind": "delta"|"narration"|"dice"|"sheet"|"draw"|"switch"|"error", ...}.
@@ -874,7 +906,7 @@ async def take_turn(history, characters, actor, action, lang="en", backend_id=No
             # a backend that can't see images still gets the caption in the prompt
             usable = images if getattr(backend, "vision", False) else None
             async for event in _run(backend, history, characters, lang, usable, cid,
-                                    repo, house):
+                                    repo, house, memory):
                 yield event
             if i:
                 yield {"kind": "backend", "backend": backend.id}   # persist the switch

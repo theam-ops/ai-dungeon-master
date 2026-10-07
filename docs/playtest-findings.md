@@ -228,7 +228,7 @@ Not directly testable without forcing a GC at the wrong moment; the fix is the s
 
 Each of these has a test that pins the current behaviour, so a change to it is deliberate.
 
-### A. Campaign history grows without limit, and every turn re-sends all of it
+### A. Campaign history grows without limit, and every turn re-sends all of it — FIXED
 
 **Severity: high. Structural — this is the one worth doing next.**
 
@@ -248,8 +248,25 @@ continuity, which is the thing the README sells; a summarisation pass costs a mo
 needs somewhere to live in the schema; and either way the right cap depends on the backend.
 Half-doing it would be worse than the honest status quo.
 
-Test: `test_known_history_grows_without_limit` — asserts each request is strictly larger than
-the last and that nothing is dropped.
+**Fixed in Phase 5** (`game/services/memory.py`, `providers.trim_stale`). What a model is
+sent is now a window, never the whole record:
+
+- **Stale state is trimmed.** Every stored turn carried its own snapshot of the party — about
+  half its size — and only the newest is true. Older snapshots are no longer sent.
+- **Older turns are condensed.** Past 30 turns, a background job asks the cheapest AI available
+  to fold the oldest into a synopsis, keeping the last 20 word for word. The people, places and
+  open threads go into the campaign library as "Campaign memory", where `search_lore` finds them.
+- **Small contexts are respected.** A local Ollama model (8,192 tokens by default) is sent only
+  as many recent turns as fit, cut on turn boundaries.
+- **Claude Code's window counts turns.** Its "40" counted messages, so it was about ten turns.
+
+Measured on a realistic four-player turn: at turn 100 a request is ~16K tokens instead of ~140K;
+past turn ~140 the old way exceeded a 200K context and stopped, the new way stays flat. Over 200
+turns the campaign sends 88% fewer input tokens. Nothing is deleted: the stored history stays
+whole, and is what gets exported.
+
+Tests: `tests/test_memory.py` — `test_requests_stay_bounded_however_long_the_campaign` is the
+fixed form of the old `test_known_history_grows_without_limit`.
 
 ### B. Import bypasses the media and document caps
 
