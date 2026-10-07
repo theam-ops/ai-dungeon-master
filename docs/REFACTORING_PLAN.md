@@ -32,7 +32,7 @@ Sorted by value per unit of work, not by the order the pillars were listed.
 | 1 | Dynamic AC + effects | ~2 days | **Done.** |
 | 2 | Port boundary (`lite` adapters only) | ~1 week | **Done.** |
 | 3 | Items as records + equipment | ~1 week | **Done.** |
-| 4 | Combat, initiative, turn queue | ~1 week | Blocked on 3 (weapons) and 1 (AC). |
+| 4 | Combat, initiative, turn queue | ~1 week | **Done.** |
 | 5 | Summarisation worker | ~4 days | Blocked on 2. **Pays for itself in tokens.** |
 | 6 | SRD retrieval | ~3 days | Cheap; `lore.py` already has the machinery. |
 | 7 | Frontend ES modules | ~1 week | Pure refactor, no behaviour change. Do before 9. |
@@ -672,6 +672,23 @@ That partial unique index is the schema doing a rules job, which is the right pl
 ---
 
 ## Phase 4 — combat and initiative
+
+> **Done.** The fight is a `combat` column on the campaign; the DM has `roll_initiative`,
+> `next_turn` and `end_combat`; the table sees an Initiative card. Where it differs:
+>
+> - **Tools are offered only with a campaign.** The solo terminal client has nowhere to
+>   keep an order, so its DM keeps the order in the fiction, as before — and the system
+>   prompt says whichever applies, rather than promising tools it lacks.
+> - **Out-of-turn actions are flagged, not refused**: the prompt carries a `<combat_note>`.
+> - **Durations count rounds in a fight**, which closes the open defect from Phase 1.
+> - **The fight never ends itself.** Removing the last enemy leaves the players in the
+>   order; enemies flee and players duel, so `end_combat` is the DM's call.
+> - **The clock is `COMBAT_TURN_GRACE`** (seconds, default 0 = off), via a delayed job on
+>   the task queue. Before it fires it re-checks the turn *and* the event log: a player who
+>   acted while the DM forgot `next_turn` is not called hesitant.
+> - **Found and fixed:** `TaskQueue.enqueue(name, **kwargs)` claimed `name`, so a job with
+>   an argument of that name - the nudge's player name - failed. The job name is now
+>   positional-only.
 
 The interesting design question is not the queue — it is **what happens when a player
 stops typing**. A table of friends on phones will have someone go and make tea. A strict

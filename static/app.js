@@ -38,6 +38,7 @@ const S = {
   canSetKeys: false,   // may this browser paste a key straight into the server?
   backend: null,       // the one running this campaign
   picked: { race: null, class: null, scores: null },
+  combat: null,        // the fight in progress, as the server stores it, or null
   notes: "",           // your own standing notes for the DM
   notesMax: 600,       // replaced by the server's real cap when a campaign is entered
   attached: [],        // images staged for the next action
@@ -1277,6 +1278,7 @@ async function refreshParty() {
 async function enterCampaign(id) {
   const info = await api(`/api/campaigns/${id}`);
   S.campaign = info;
+  S.combat = info.combat || null;
   renderHouse();
   S.party = info.party;
   S.backend = info.backend;
@@ -1415,6 +1417,23 @@ function handle(ev) {
     case "join":
       appendChip(el("div", "join-chip", ev.text || t("joins", ev.character)));
       break;
+
+    case "combat": {
+      S.combat = ev.state || null;
+      const lines = [];
+      const rolled = (ev.rolled || []).map((e) => `${e.name} ${e.total}`).join(" \u00b7 ");
+      if (ev.what === "start") lines.push(t("combat_start", rolled));
+      if (ev.what === "join") lines.push(t("combat_join", rolled));
+      if ((ev.removed || []).length) lines.push(t("combat_out", ev.removed.join(", ")));
+      (ev.expired || []).forEach((x) => lines.push(t("combat_expired", x.character, x.name)));
+      const acting = S.combat ? S.combat.order[S.combat.turn % S.combat.order.length] : null;
+      if (ev.what === "round" && acting) lines.push(t("combat_round_turn", S.combat.round, acting.name));
+      else if (ev.what === "turn" && acting) lines.push(t("combat_turn", acting.name));
+      if (ev.what === "end") lines.push(t("combat_end"));
+      lines.forEach((line) => appendChip(el("div", "combat-chip", line)));
+      renderLive();
+      break;
+    }
 
     case "house":
       // a table rule changed - everyone sees who, and the toggle follows
@@ -1759,6 +1778,41 @@ function cardItems(c) {
   return box;
 }
 
+/* The initiative order: who acts, in what order, and whose turn it is now. Shown to
+   everyone, because the order is the table's, not the DM's secret. */
+function cardCombat() {
+  const c = S.combat;
+  if (!c || !c.order || !c.order.length) return null;
+  const box = card("initiative", "dice");
+  box.classList.add("combat-card");
+  box.append(el("div", "combat-round", t("combat_round", c.round)));
+  const list = el("ol", "combat-order");
+  const me = S.campaign && S.campaign.you;
+  c.order.forEach((e, i) => {
+    const now = i === c.turn;
+    const row = el("li", "combatant" + (now ? " now" : "") + (e.pc ? "" : " npc")
+                         + (e.name === me ? " me" : ""));
+    if (now) row.setAttribute("aria-current", "step");
+    row.append(el("span", "combatant-total", String(e.total)),
+               el("span", "combatant-name", e.name));
+    if (!e.pc) row.append(el("span", "combatant-tag", t("combat_npc")));
+    if (now) row.append(el("span", "combatant-now", t("combat_now")));
+    list.append(row);
+  });
+  box.append(list);
+  return box;
+}
+
+/* The composer says whose turn it is - without stopping anyone. Acting out of turn is
+   allowed; the DM is told and fits it in as a reaction or on their turn. */
+function renderTurnHint() {
+  const c = S.combat;
+  const acting = c && c.order && c.order.length ? c.order[c.turn % c.order.length] : null;
+  const me = S.campaign && S.campaign.you;
+  input.placeholder = acting && acting.pc && acting.name !== me
+    ? t("not_your_turn", acting.name) : t("what_do");
+}
+
 /* What a caster has left, one row of pips per spell level. Nothing for anyone else -
    including a level-1 ranger, who casts nothing yet. */
 function cardSlots(c) {
@@ -1901,15 +1955,16 @@ function renderDash() {
   if (c) {
     if (wide) {
       // all of it at once; the topbar strip already carries the party on a wide screen
-      [cardVitals(c), cardConditions(c), cardSlots(c), cardItems(c), cardSkills(c),
-       cardAbilities(c), cardRolls()].forEach((n) => n && box.append(n));
+      [cardCombat(), cardVitals(c), cardConditions(c), cardSlots(c), cardItems(c),
+       cardSkills(c), cardAbilities(c), cardRolls()].forEach((n) => n && box.append(n));
     } else if (view === "character") {
-      [cardVitals(c), cardConditions(c), cardSlots(c), cardItems(c), cardSkills(c)]
+      [cardCombat(), cardVitals(c), cardConditions(c), cardSlots(c), cardItems(c),
+       cardSkills(c)]
         .forEach((n) => n && box.append(n));
     } else if (view === "detail") {
       [cardAbilities(c), cardRolls()].forEach((n) => n && box.append(n));
     } else if (view === "party") {
-      box.append(cardParty());
+      [cardCombat(), cardParty()].forEach((n) => n && box.append(n));
     }
   }
 
@@ -1942,6 +1997,7 @@ function renderLive() {
   renderParty();
   renderHud();
   renderDash();
+  renderTurnHint();
 }
 
 /* Re-lay-out when the screen changes shape - a rotated phone, a dragged window.

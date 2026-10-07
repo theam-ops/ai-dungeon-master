@@ -635,6 +635,20 @@ you lose 20 ft and roll STR, DEX and CON checks, attacks and saves at disadvanta
 only the carrying limit applies. Anyone at the table can change it, and the feed says who
 did.
 
+**Fights have an order.** When a fight starts the DM calls for initiative and Python
+rolls it — for every character at the table and every enemy. The **Initiative** card on
+the dashboard shows the round, the order, and whose turn it is, and the DM is shown the
+same thing every turn. You can still act out of turn: you are never refused, and the DM
+fits it in as a reaction or on your turn. The message box says whose turn it is when it
+is not yours.
+
+During a fight, effect durations count rounds rather than actions, so a spell lasts as
+long for a party of five as for one.
+
+Hosts can add a clock: set `COMBAT_TURN_GRACE` to a number of seconds, and a player
+character's turn that sits idle that long passes, with the DM narrating a moment's
+hesitation. Off by default — it spends a DM turn nobody asked for.
+
 Two more appear only when there is something behind them — a tool with nothing behind
 it is worse than no tool, because the model reaches for it anyway:
 

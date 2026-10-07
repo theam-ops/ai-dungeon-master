@@ -702,6 +702,39 @@ button:disabled { opacity: .45; cursor: default; }
   font-variant-numeric: tabular-nums;
 }
 
+/* the initiative order */
+.combat-card { border-color: var(--gold-dim); }
+.combat-round {
+  font-family: var(--display); font-size: 12px; letter-spacing: .08em;
+  color: var(--gold); margin: -2px 0 8px;
+}
+.combat-order { list-style: none; margin: 0; padding: 0; display: grid; gap: 4px; }
+.combatant {
+  display: flex; align-items: center; gap: 10px;
+  padding: 6px 8px; border-radius: 8px; border: 1px solid transparent;
+}
+.combatant.now { border-color: var(--gold); background: var(--ink-3); }
+.combatant.npc .combatant-name { color: var(--muted); }
+.combatant.me .combatant-name { font-weight: 600; }
+.combatant-total {
+  flex: 0 0 26px; text-align: right; font-family: var(--mono); font-size: 12px;
+  color: var(--muted); font-variant-numeric: tabular-nums;
+}
+.combatant-name { flex: 1 1 auto; min-width: 0; overflow-wrap: anywhere; }
+.combatant-tag {
+  font-size: 10px; letter-spacing: .06em; color: var(--muted);
+  border: 1px solid var(--edge); border-radius: 999px; padding: 0 6px;
+}
+.combatant-now {
+  font-size: 10px; letter-spacing: .06em; text-transform: uppercase;
+  color: var(--ink); background: var(--gold); border-radius: 999px; padding: 1px 7px;
+}
+:root[data-lang="th"] .combatant-now { text-transform: none; letter-spacing: 0; }
+.combat-chip {
+  align-self: center; font-size: 13px; color: var(--gold);
+  border: 1px solid var(--gold-dim); border-radius: 999px; padding: 3px 12px;
+}
+
 .house-toggle { display: flex; align-items: center; gap: 10px; margin: 4px 0 2px; cursor: pointer; }
 .house-toggle input { width: 18px; height: 18px; accent-color: var(--gold); }
 .sheet-list { font-size: 15px; color: #cfc3b0; margin: 0 0 12px; }

@@ -107,8 +107,12 @@ class TaskQueue(ABC):
         """Make `job` runnable as `name`. Called once, at start-up."""
 
     @abstractmethod
-    async def enqueue(self, name: str, **kwargs: Any) -> None:
-        """Run the job called `name` with `kwargs`, without waiting for it.
+    async def enqueue(self, job: str, /, *, delay: float = 0, **kwargs: Any) -> None:
+        """Run the job called `job` with `kwargs`, without waiting for it - after
+        `delay` seconds, if given.
+
+        `job` is positional-only so a job may take an argument called `name` (or `job`)
+        of its own; only `delay` is reserved.
 
         Arguments must be plain data - a queue that crosses processes will serialise
         them. A job's failures are its own: they are logged, never raised here.
@@ -152,6 +156,12 @@ class Repository(ABC):
         """The campaign's optional rules: every key of `rules.HOUSE_RULES`, as booleans."""
     @abstractmethod
     async def set_campaign_house(self, cid, house): ...
+    @abstractmethod
+    async def get_combat(self, cid):
+        """The fight in progress - see `rules.join_combat` for its shape - or None."""
+    @abstractmethod
+    async def set_combat(self, cid, combat):
+        """Store the fight; None ends it."""
     @abstractmethod
     async def delete_campaign(self, cid): ...
 

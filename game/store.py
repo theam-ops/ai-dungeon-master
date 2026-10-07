@@ -33,6 +33,7 @@ CREATE TABLE IF NOT EXISTS campaigns (
     lang        TEXT NOT NULL DEFAULT 'en',
     backend     TEXT NOT NULL DEFAULT '',
     house       TEXT NOT NULL DEFAULT '{}',
+    combat      TEXT NOT NULL DEFAULT '',
     history     TEXT NOT NULL DEFAULT '[]',
     last_art    REAL NOT NULL DEFAULT 0,
     created_at  REAL NOT NULL,
@@ -150,6 +151,8 @@ def _migrate(conn):
         conn.execute("ALTER TABLE campaigns ADD COLUMN lang TEXT NOT NULL DEFAULT 'en'")
     if "backend" not in cols:
         conn.execute("ALTER TABLE campaigns ADD COLUMN backend TEXT NOT NULL DEFAULT ''")
+    if "combat" not in cols:
+        conn.execute("ALTER TABLE campaigns ADD COLUMN combat TEXT NOT NULL DEFAULT ''")
     if "house" not in cols:
         conn.execute("ALTER TABLE campaigns ADD COLUMN house TEXT NOT NULL DEFAULT '{}'")
     if "last_art" not in cols:
@@ -214,6 +217,24 @@ def set_campaign_house(cid, house):
                  (json.dumps(clean), time.time(), cid))
     conn.commit()
     return clean
+
+
+def get_combat(cid):
+    """The fight in progress, or None."""
+    row = db().execute("SELECT combat FROM campaigns WHERE id=?", (cid,)).fetchone()
+    try:
+        return json.loads(row["combat"]) if row and row["combat"] else None
+    except (TypeError, ValueError):
+        return None
+
+
+def set_combat(cid, combat):
+    """Start, change or (with None) end the fight."""
+    conn = db()
+    conn.execute("UPDATE campaigns SET combat=?, updated_at=? WHERE id=?",
+                 (json.dumps(combat, ensure_ascii=False) if combat else "", time.time(), cid))
+    conn.commit()
+    return combat
 
 
 def set_campaign_backend(cid, backend):
@@ -568,7 +589,7 @@ def export_campaign(cid):
         "format": "ai-dm-campaign/1",
         "campaign": {"name": c["name"], "code": c["code"], "lang": c["lang"] or "en",
                      "backend": c["backend"] or "", "history": json.loads(c["history"]),
-                     "house": campaign_house(cid)},
+                     "house": campaign_house(cid), "combat": get_combat(cid)},
         "characters": [{k: v for k, v in ch.items() if k != "_id"} for ch in party(cid)],
         "events": events_since(cid, 0, limit=100000),
         "media": [{k: v for k, v in m.items() if k not in ("campaign_id",)}
@@ -632,10 +653,12 @@ def import_campaign(blob):
         code = new_code()
 
     conn.execute(
-        "INSERT INTO campaigns (id, code, name, lang, backend, house, history, created_at,"
-        " updated_at) VALUES (?,?,?,?,?,?,?,?,?)",
+        "INSERT INTO campaigns (id, code, name, lang, backend, house, combat, history,"
+        " created_at, updated_at) VALUES (?,?,?,?,?,?,?,?,?,?)",
         (cid, code, meta.get("name", "Imported campaign"), meta.get("lang", "en"),
          meta.get("backend", ""), json.dumps(rules.clean_house(meta.get("house"))),
+         json.dumps(meta["combat"], ensure_ascii=False)
+         if isinstance(meta.get("combat"), dict) and meta["combat"].get("order") else "",
          json.dumps(history, ensure_ascii=False), now, now))
 
     # media first: characters reference their portrait by id

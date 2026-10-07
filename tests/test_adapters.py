@@ -252,3 +252,38 @@ def test_prod_mode_says_plainly_that_it_does_not_exist_yet():
 def test_an_unknown_mode_is_refused():
     with pytest.raises(ValueError, match="lite"):
         build_adapters("serverless")
+
+
+def test_a_job_may_take_an_argument_called_name():
+    """`enqueue(name, **kwargs)` once claimed `name` for itself, so a job whose own
+    argument was called `name` - a player's name, say - failed with 'multiple values'."""
+    async def scenario():
+        adapters = build_adapters("lite")
+        seen = {}
+
+        async def greet(_adapters, name, job):
+            seen.update(name=name, job=job)
+
+        adapters.queue.register("greet", greet)
+        await adapters.queue.enqueue("greet", name="Vess", job="ranger")
+        await asyncio.sleep(0.01)
+        return seen
+    assert run(scenario()) == {"name": "Vess", "job": "ranger"}
+
+
+def test_a_job_can_be_delayed():
+    async def scenario():
+        adapters = build_adapters("lite")
+        ran = asyncio.Event()
+
+        async def later(_adapters):
+            ran.set()
+
+        adapters.queue.register("later", later)
+        await adapters.queue.enqueue("later", delay=0.05)
+        early = ran.is_set()
+        await asyncio.sleep(0.02)
+        still_early = ran.is_set()
+        await asyncio.wait_for(ran.wait(), 1)
+        return early, still_early
+    assert run(scenario()) == (False, False)

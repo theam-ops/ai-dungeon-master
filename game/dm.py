@@ -4,6 +4,7 @@ The model narrates and judges. Every die and every point of damage goes through
 `rules.py` here in Python, so the DM cannot invent a roll or lose track of your HP.
 """
 
+import json
 import os
 
 from . import i18n, lore, providers, rules
@@ -68,8 +69,6 @@ RUNNING THE PARTY
 - Address characters by name. If someone has been quiet for a few turns, aim a hook at them -
   an NPC turns to them, something moves on their side of the room.
 - With a party of one, ignore all of this and run a tight solo adventure.
-- In combat, keep the order moving in the fiction ("the ghoul is already on Vess") rather than
-  demanding a rigid initiative count.
 - A turn may carry <player_notes> written by the player who just acted: standing requests about
   their own character - the tone they want, backstory they have decided on, threads they want
   picked up, things they would rather not meet. Honour them for that character, over time rather
@@ -252,6 +251,81 @@ REST_TOOL = {
 
 TOOLS.extend([EQUIP_TOOL, EFFECT_TOOL, SLOT_TOOL, REST_TOOL])
 
+COMBAT_FICTION = (
+    'In combat, keep the order moving in the fiction ("the ghoul is already on Vess") rather '
+    "than demanding a rigid initiative count.")
+
+COMBAT_PROCEDURE = """\
+RUNNING A FIGHT
+- When a fight starts, call roll_initiative, naming every enemy with its initiative bonus. Every
+  player character is rolled for automatically. Never roll initiative yourself.
+- The <combat> block shows the round, the order, and whose turn it is. Run the fight in that
+  order. When a combatant's turn is done, call next_turn - naming anyone who fell or fled in
+  `remove`. When it is an NPC's turn, play it, then call next_turn.
+- A player may act out of turn. Do not refuse them: treat it as a reaction if it fits one, or
+  tell them it will happen on their turn and keep the order.
+- Someone in `not_in_initiative` (they sat down mid-fight): call roll_initiative to bring them in.
+  More enemies arriving: roll_initiative again with just the newcomers.
+- When the fight is over, call end_combat. Effect durations count combat rounds while it lasts."""
+
+INITIATIVE_TOOL = {
+    "name": "roll_initiative",
+    "description": (
+        "Start a fight, or add combatants to the one in progress. Rolls initiative in "
+        "Python for every player character not yet in the order, and for each enemy you "
+        "name. Returns the order. Mid-fight it never changes whose turn it is."
+    ),
+    "strict": True,
+    "input_schema": {
+        "type": "object",
+        "properties": {
+            "npcs": {"type": "array", "description": "Enemies and allies you run. Give "
+                     "duplicates the same name; they are numbered for you.",
+                     "items": {"type": "object", "properties": {
+                         "name": {"type": "string"},
+                         "bonus": {"type": "integer",
+                                   "description": "Initiative bonus - usually DEX modifier."}},
+                         "required": ["name", "bonus"], "additionalProperties": False}},
+            "reason": {"type": "string"},
+        },
+        "required": ["npcs", "reason"],
+        "additionalProperties": False,
+    },
+}
+
+NEXT_TURN_TOOL = {
+    "name": "next_turn",
+    "description": (
+        "End the current combatant's turn and pass to the next in initiative. Name anyone "
+        "who is out of the fight - dead, fled, captured - in `remove`. A new round begins "
+        "after the last in the order; effect durations count down then."
+    ),
+    "strict": True,
+    "input_schema": {
+        "type": "object",
+        "properties": {
+            "remove": {"type": "array", "items": {"type": "string"},
+                       "description": "Combatants leaving the fight. Empty if none."},
+        },
+        "required": ["remove"],
+        "additionalProperties": False,
+    },
+}
+
+END_COMBAT_TOOL = {
+    "name": "end_combat",
+    "description": "The fight is over. Clears the initiative order.",
+    "strict": True,
+    "input_schema": {
+        "type": "object",
+        "properties": {"reason": {"type": "string"}},
+        "required": ["reason"],
+        "additionalProperties": False,
+    },
+}
+
+COMBAT_TOOLS = [INITIATIVE_TOOL, NEXT_TURN_TOOL, END_COMBAT_TOOL]
+
 # Only offered to the DM when the campaign has documents to search - a tool with nothing
 # behind it is worse than no tool, because the model will still reach for it.
 LORE_TOOL = {
@@ -316,6 +390,8 @@ async def tools_for(cid, repo=None):
     tools = list(TOOLS)
     if cid and repo is None:
         raise ValueError("tools_for for a campaign needs its repository - pass repo=, from the adapters")
+    if cid:
+        tools.extend(COMBAT_TOOLS)     # a fight lives on the campaign, so needs one
     if cid and await repo.lore_documents(cid):
         tools.append(LORE_TOOL)
     # no campaign means no feed and nowhere to file the picture - that is the terminal
@@ -323,6 +399,10 @@ async def tools_for(cid, repo=None):
     if cid and providers.image_backend() is not None:
         tools.append(IMAGE_TOOL)
     return tools
+
+
+def _norm(name):
+    return " ".join(str(name or "").lower().split())
 
 
 def _find(characters, name):
@@ -363,6 +443,60 @@ async def _draw_scene(args, cid, repo):
             "with the scene and do not refer to the picture.",
             {"kind": "draw", "prompt": prompt,
              "caption": (args.get("caption") or "").strip()[:200]})
+
+
+async def _combat(name, args, characters, cid, repo):
+    """roll_initiative, next_turn, end_combat. The order is stored on the campaign; the
+    event carries it, so every browser shows the same fight."""
+    combat = await repo.get_combat(cid)
+    event = {"kind": "combat", "rolled": [], "removed": [], "expired": []}
+
+    if name == "end_combat":
+        if not combat:
+            return "There was no fight in progress.", None
+        await repo.set_combat(cid, None)
+        return "The fight is over; the initiative order is cleared.", \
+            {**event, "what": "end", "state": None}
+
+    if name == "roll_initiative":
+        try:
+            combat, rolled = rules.join_combat(combat, characters, args.get("npcs") or [])
+        except ValueError as e:
+            return f"ERROR: {e}", None
+        what = "start" if len(rolled) == len(combat["order"]) else "join"
+        event.update(what=what, rolled=[{"name": e["name"], "roll": e["roll"],
+                                        "bonus": e["bonus"], "total": e["total"]}
+                                       for e in rolled])
+        head = "Initiative rolled" if what == "start" else "Joining the fight"
+        detail = ", ".join(f"{e['name']} {e['roll']}{e['bonus']:+d}={e['total']}" for e in rolled)
+        text = f"{head}: {detail or 'nobody new'}."
+    else:
+        if not combat:
+            return "ERROR: no fight in progress - call roll_initiative to start one.", None
+        combat, wrapped, removed = rules.next_turn(combat, args.get("remove") or [])
+        event["removed"] = removed
+        if combat is None:
+            await repo.set_combat(cid, None)
+            return (f"{', '.join(removed)} out. Nobody is left in the fight; it is over.",
+                    {**event, "what": "end", "state": None})
+        text = (f"{', '.join(removed)} out of the fight. " if removed else "")
+        if wrapped:
+            # a round has passed: durations run down now, not on every player's action
+            for ch in characters:
+                for fx_name in rules.tick_effects(ch):
+                    event["expired"].append({"character": ch["name"], "name": fx_name})
+                rules.recompute_ac(ch)
+            text += f"Round {combat['round']} begins. "
+            if event["expired"]:
+                text += "Worn off: " + ", ".join(f"{x['name']} ({x['character']})"
+                                                 for x in event["expired"]) + ". "
+        event["what"] = "round" if wrapped else "turn"
+
+    await repo.set_combat(cid, combat)
+    acting = rules.current_turn(combat)
+    text += (f"It is {acting['name']}'s turn" + ("" if acting["pc"] else " - an NPC: run it")
+             + f". Order: {json.dumps(rules.combat_view(combat, characters), ensure_ascii=False)}")
+    return text, {**event, "state": combat}
 
 
 def _spend_slot(args, characters, lang, house):
@@ -500,6 +634,10 @@ async def run_tool(name, args, characters, lang="en", cid=None, repo=None, house
         return _defence(name, args, characters, lang, house)
     if name == "use_spell_slot":
         return _spend_slot(args, characters, lang, house)
+    if name in ("roll_initiative", "next_turn", "end_combat"):
+        if not cid or repo is None:
+            return "ERROR: a fight needs a campaign to keep its initiative order in.", None
+        return await _combat(name, args, characters, cid, repo)
     if name == "long_rest":
         return _long_rest(args, characters, lang, house)
 
@@ -587,7 +725,7 @@ async def run_tool(name, args, characters, lang="en", cid=None, repo=None, house
                     "changes": changes}
 
 
-def build_prompt(characters, actor, action, lang="en", house=None):
+def build_prompt(characters, actor, action, lang="en", house=None, combat=None):
     """One player turn, labelled so the DM knows who acted.
 
     The acting player's standing notes ride here, in the turn itself, rather than in
@@ -603,8 +741,17 @@ def build_prompt(characters, actor, action, lang="en", house=None):
     if acting and (acting.get("notes") or "").strip():
         notes = (f'<player_notes character="{acting["name"]}">'
                  f'{acting["notes"].strip()}</player_notes>\n\n')
+    fight = ""
+    view = rules.combat_view(combat, characters)
+    if view:
+        fight = f"<combat>{json.dumps(view, ensure_ascii=False)}</combat>\n\n"
+        acting_now = rules.current_turn(combat)
+        if actor and acting_now and _norm(acting_now["name"]) != _norm(actor):
+            fight += (f'<combat_note>It is {acting_now["name"]}\'s turn, not {actor}\'s. '
+                      f"Treat {actor}'s action as a reaction if it fits one; otherwise it "
+                      "happens on their turn. Do not refuse them.</combat_note>\n\n")
     return (f"<party_state>{rules.state_block(characters, lang, house)}</party_state>\n\n"
-            f"{notes}{who} {action}")
+            f"{fight}{notes}{who} {action}")
 
 
 async def system_blocks(lang, cid=None, repo=None):
@@ -618,6 +765,8 @@ async def system_blocks(lang, cid=None, repo=None):
     extra = i18n.NARRATION_INSTRUCTION.get(lang, "")
     if extra.strip():
         blocks.append({"type": "text", "text": extra})
+    # with the initiative tools the DM runs the order; without them, the fiction does
+    blocks.append({"type": "text", "text": COMBAT_PROCEDURE if cid else COMBAT_FICTION})
     if cid:
         if repo is None:
             raise ValueError("system_blocks for a campaign needs its repository - pass repo=, from the adapters")
@@ -690,7 +839,7 @@ async def _run(backend, history, characters, lang, images=None, cid=None, repo=N
 
 
 async def take_turn(history, characters, actor, action, lang="en", backend_id=None,
-                    images=None, cid=None, repo=None, house=None):
+                    images=None, cid=None, repo=None, house=None, combat=None):
     """Run one DM turn. Async generator of events; mutates history and characters.
 
     Yields {"kind": "delta"|"narration"|"dice"|"sheet"|"draw"|"switch"|"error", ...}.
@@ -703,7 +852,8 @@ async def take_turn(history, characters, actor, action, lang="en", backend_id=No
     """
     lang = i18n.normalise(lang)
     history.append({"role": "user",
-                    "content": build_prompt(characters, actor, action, lang, house)})
+                    "content": build_prompt(characters, actor, action, lang, house,
+                                            combat)})
     mark = len(history)
     images = images or []
 

@@ -19,6 +19,8 @@ Environment:
                         `prod` is planned, not built - see docs/REFACTORING_PLAN.md
     MAX_TURNS_PER_MIN   optional - per-campaign spend backstop (default 12)
     DM_ART_EVERY_TURNS  optional - player turns between DM illustrations (default 6)
+    COMBAT_TURN_GRACE   optional - seconds an idle combat turn waits before it passes
+                        (default 0: never)
 
 At least one AI must be reachable: any key above, or a running Ollama.
 """
@@ -45,7 +47,7 @@ from game import claude_code, i18n, lore, media, providers, rules
 from game.adapters import build_adapters
 from game.services import events
 from game.services.events import public_character
-from game.services.turn import run_dm_turn, turn_key
+from game.services.turn import combat_nudge, run_dm_turn, turn_key
 from game.services.turn import player_safe  # noqa: F401 - re-exported; tests use it here
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -504,6 +506,7 @@ async def campaign_detail(request: Request, cid: str):
         "notes": me.get("notes", ""),        # your own standing notes, nobody else's
         "notes_max": rules.MAX_NOTES_CHARS,
         "house": await A.repo.campaign_house(cid),
+        "combat": await A.repo.get_combat(cid),
         "party": [public_character(c) for c in await A.repo.party(cid)],
         "last_seq": await A.repo.last_seq(cid),
         "started": bool(await A.repo.get_history(cid)),
@@ -1160,6 +1163,7 @@ def fresh_adapters(mode=None):
     adapters = build_adapters(mode or os.environ.get("DND_MODE", "lite"))
     adapters.queue.register("dm_turn", run_dm_turn)
     adapters.queue.register("illustrate", illustrate)
+    adapters.queue.register("combat_nudge", combat_nudge)
     return adapters
 
 

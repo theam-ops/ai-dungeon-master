@@ -28,7 +28,7 @@ def test_a_whole_campaign(app_client):
     # armour is always there, since AC is derived from it in every campaign
     assert {t["name"] for t in first["tools"]} == {
         "roll_dice", "update_character", "equip_armor", "set_effect",
-        "use_spell_slot", "long_rest"}
+        "use_spell_slot", "long_rest", "roll_initiative", "next_turn", "end_combat"}
     assert "Vess" in first["messages"][0]["content"]
 
     # -- a turn with a roll and damage -------------------------------------- #

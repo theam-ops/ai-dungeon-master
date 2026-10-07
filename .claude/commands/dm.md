@@ -91,6 +91,10 @@ python play.py update Ilse --long-rest       # HP and slots back; timed effects 
 
 Cantrips need no slot.
 
+**Initiative is rolled, never stated.** When a fight starts, roll for each combatant with
+`play.py roll 1d20+<DEX modifier> --reason "<name>: initiative"`, say the order out loud,
+and run it. (The web app keeps the order for you; here, you keep it.)
+
 If the tool's output contradicts something you just narrated, correct yourself in the
 next line. The tool is the truth.
 

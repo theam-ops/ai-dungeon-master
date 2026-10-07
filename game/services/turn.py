@@ -7,12 +7,18 @@ or several.
 """
 
 import logging
+import os
 import re
 
 from .. import dm, providers, rules
 from .events import broadcast, party_payload, publish
 
 log = logging.getLogger("dnd")
+
+# Seconds a player character's combat turn may sit idle before it passes. 0 - the default
+# - never: a table that wants a clock opts in. When it fires, the DM narrates a moment's
+# hesitation and moves on, which costs a turn's worth of tokens nobody asked for.
+COMBAT_TURN_GRACE = float(os.environ.get("COMBAT_TURN_GRACE", "0") or 0)
 
 
 def turn_key(cid):
@@ -80,6 +86,7 @@ async def _turn(adapters, cid, actor, action, images):
     characters = await repo.party(cid)
     history = await repo.get_history(cid)
     house = await repo.campaign_house(cid)
+    combat = await repo.get_combat(cid)
 
     await broadcast(adapters, cid, {"kind": "thinking", "on": True})
     try:
@@ -87,7 +94,8 @@ async def _turn(adapters, cid, actor, action, images):
                                         await repo.campaign_lang(cid),
                                         await repo.campaign_backend(cid)
                                         or providers.default_id(),
-                                        images, cid, repo=repo, house=house):
+                                        images, cid, repo=repo, house=house,
+                                        combat=combat):
             kind = event.pop("kind")
             if kind == "delta":
                 await broadcast(adapters, cid, {"kind": "delta", **event})
@@ -110,11 +118,19 @@ async def _turn(adapters, cid, actor, action, images):
                     log.warning("campaign %s %s: %s", cid, kind, event[field])
                     event[field] = player_safe(event[field])
             await publish(adapters, cid, kind, event)
+            if kind == "combat":
+                # the order changed; a new round may have worn effects off, and AC with them
+                await repo.save_party(characters)
+                await broadcast(adapters, cid, await party_payload(adapters, cid))
+                await _schedule_nudge(adapters, cid, event.get("state"))
             if kind == "sheet":
                 # persist and push straight away so HP bars move as damage lands
                 await repo.save_party(characters)
                 await broadcast(adapters, cid, await party_payload(adapters, cid))
-        if actor:
+        # Outside a fight, a timed effect runs down with each player's action. During
+        # one it runs down by the round instead (see dm._combat): five players acting
+        # once each is one round, not five.
+        if actor and not await repo.get_combat(cid):
             await expire_effects(adapters, cid, characters)
     except Exception as e:  # never leave the table hanging on an unexpected fault
         await publish(adapters, cid, "error",
@@ -128,3 +144,37 @@ async def _turn(adapters, cid, actor, action, images):
             "kind": "backend-now",
             "backend": await repo.campaign_backend(cid) or providers.default_id()})
         await broadcast(adapters, cid, {"kind": "thinking", "on": False})
+
+
+async def _schedule_nudge(adapters, cid, combat):
+    """If the turn just passed to a player character, start their clock - when the
+    table has asked for one."""
+    acting = rules.current_turn(combat)
+    if COMBAT_TURN_GRACE <= 0 or not acting or not acting["pc"]:
+        return
+    await adapters.queue.enqueue(
+        "combat_nudge", delay=COMBAT_TURN_GRACE, cid=cid, name=acting["name"],
+        round_no=combat["round"], turn=combat["turn"],
+        since=await adapters.repo.last_seq(cid))
+
+
+async def combat_nudge(adapters, cid, name, round_no, turn, since):
+    """A player character's turn has sat idle for COMBAT_TURN_GRACE seconds.
+
+    Checked again now, because a lot can happen in the wait: the turn may have moved on,
+    the fight may be over, or the player may have acted and the DM simply not yet called
+    next_turn - none of which is hesitation. Only when it is still exactly that turn and
+    that player has said nothing since does the DM get told their moment passes.
+    """
+    combat = await adapters.repo.get_combat(cid)
+    acting = rules.current_turn(combat)
+    if (not acting or acting["name"] != name or combat["round"] != round_no
+            or combat["turn"] != turn):
+        return
+    for event in await adapters.repo.events_since(cid, since):
+        if event.get("kind") == "player" and event.get("character") == name:
+            return
+    await run_dm_turn(adapters, cid, None, (
+        f"<table_note>{name} has not acted for a while and their turn passes. Narrate a "
+        "brief moment of hesitation - no harm comes of it beyond the lost turn - then call "
+        "next_turn and carry on.</table_note>"))

@@ -724,6 +724,121 @@ def slots_line(ch):
     return ", ".join(f"{ordinal(l)} {r}/{t}" for l, (r, t) in left.items())
 
 
+# --------------------------------------------------------------------------- #
+# combat
+# --------------------------------------------------------------------------- #
+#
+# A fight belongs to the campaign, not to a character:
+#
+#     {"round": 2, "turn": 1, "order": [{"name": "Vess", "pc": True, "bonus": 3,
+#                                         "roll": 17, "total": 20, "tie": 11}, ...]}
+#
+# and is None outside one. `turn` indexes `order`. Monsters live only here, by name - they
+# have no sheet, and the DM keeps their hit points in the narration, as it always has.
+#
+# The order guides the table; it does not gag it. A player who acts out of turn is not
+# refused - the DM is told, and treats it as a reaction or holds it. A strict queue that
+# stops the whole campaign because one friend went to make tea is worse than no queue.
+
+MAX_COMBATANTS = 30
+
+
+def initiative_bonus(ch):
+    return modifier(ch["abilities"]["DEX"])
+
+
+def _entry(name, bonus, pc):
+    roll = random.randint(1, 20)
+    # ties go to the higher bonus, then to a d20 rolled now and kept - so the order is
+    # settled once, in Python, and never re-sorted differently on the next read
+    return {"name": name, "pc": pc, "bonus": int(bonus), "roll": roll,
+            "total": roll + int(bonus), "tie": random.randint(1, 20)}
+
+
+def _ordered(order):
+    return sorted(order, key=lambda e: (-e["total"], -e["bonus"], -e["tie"]))
+
+
+def current_turn(combat):
+    """The entry whose turn it is, or None."""
+    if not combat or not combat.get("order"):
+        return None
+    return combat["order"][combat["turn"] % len(combat["order"])]
+
+
+def join_combat(combat, characters, npcs=()):
+    """Roll initiative for everyone not already in the fight, starting one if needed.
+
+    Every character at the table is rolled for - nobody is left out of a fight because
+    the DM forgot them. Monsters come from `npcs`: [{"name", "bonus"}]. Called again
+    mid-fight it adds the newcomers (reinforcements, a player who just sat down)
+    without disturbing whose turn it is. Returns (combat, the entries just rolled).
+    """
+    combat = {"round": 1, "turn": 0, "order": []} if not combat else {
+        "round": combat["round"], "turn": combat["turn"], "order": list(combat["order"])}
+    taken = {_norm(e["name"]) for e in combat["order"]}
+    rolled = []
+    for ch in characters:
+        if _norm(ch["name"]) not in taken:
+            rolled.append(_entry(ch["name"], initiative_bonus(ch), True))
+            taken.add(_norm(ch["name"]))
+    for npc in npcs or ():
+        base = " ".join(str(npc.get("name") or "").split())[:40] or "Foe"
+        name, n = base, 2
+        while _norm(name) in taken:              # two goblins are Goblin and Goblin 2
+            name, n = f"{base} {n}", n + 1
+        bonus = max(-5, min(15, int(npc.get("bonus") or 0)))
+        rolled.append(_entry(name, bonus, False))
+        taken.add(_norm(name))
+    if len(combat["order"]) + len(rolled) > MAX_COMBATANTS:
+        raise ValueError(f"a fight holds at most {MAX_COMBATANTS} combatants")
+
+    acting = current_turn(combat)
+    combat["order"] = _ordered(combat["order"] + rolled)
+    if acting:                                   # whoever was acting still is
+        combat["turn"] = next(i for i, e in enumerate(combat["order"])
+                              if e["name"] == acting["name"])
+    return combat, rolled
+
+
+def next_turn(combat, remove=()):
+    """End the current combatant's turn, dropping anyone in `remove` - the fallen, the
+    fled. Returns (combat or None if nobody is left, whether a new round began, the
+    names actually removed)."""
+    old, turn = combat["order"], combat["turn"] % max(1, len(combat["order"]))
+    gone = {_norm(n) for n in remove or ()}
+    kept = [e for e in old if _norm(e["name"]) not in gone]
+    removed = [e["name"] for e in old if _norm(e["name"]) in gone]
+    if not kept:
+        return None, False, removed
+    # where the turn goes: past the current combatant if they are still standing,
+    # or to whoever now stands in their place if they are not
+    before = sum(1 for e in old[:turn] if _norm(e["name"]) not in gone)
+    stays = _norm(old[turn]["name"]) not in gone
+    nxt, round_no, wrapped = before + (1 if stays else 0), combat["round"], False
+    if nxt >= len(kept):
+        nxt, round_no, wrapped = 0, round_no + 1, True
+    return {"round": round_no, "turn": nxt, "order": kept}, wrapped, removed
+
+
+def combat_view(combat, characters=()):
+    """The fight as the DM is shown it, every turn."""
+    if not combat:
+        return None
+    acting = current_turn(combat)
+    view = {
+        "round": combat["round"],
+        "whose_turn": acting["name"] + ("" if acting["pc"] else " (NPC - you run it)"),
+        "order": [f"{e['name']} {e['total']}" + ("" if e["pc"] else " (NPC)")
+                  for e in combat["order"]],
+    }
+    fighting = {_norm(e["name"]) for e in combat["order"]}
+    missing = [c["name"] for c in characters if _norm(c["name"]) not in fighting]
+    if missing:
+        view["not_in_initiative"] = missing     # joined mid-fight: roll them in
+    return view
+
+
 def roll_ability():
     """4d6 drop lowest."""
     d = sorted(random.randint(1, 6) for _ in range(4))

@@ -130,16 +130,18 @@ class AsyncioTaskQueue(TaskQueue):
     def register(self, name, job):
         self._jobs[name] = job
 
-    async def enqueue(self, name, **kwargs):
-        job = self._jobs.get(name)
+    async def enqueue(self, job_name, /, *, delay=0, **kwargs):
+        job = self._jobs.get(job_name)
         if job is None:
-            raise KeyError(f"no job registered as {name!r}")
-        task = asyncio.create_task(self._run(name, job, kwargs))
+            raise KeyError(f"no job registered as {job_name!r}")
+        task = asyncio.create_task(self._run(job_name, job, kwargs, delay))
         self._running.add(task)
         task.add_done_callback(self._running.discard)
 
-    async def _run(self, name, job, kwargs):
+    async def _run(self, name, job, kwargs, delay=0):
         try:
+            if delay:
+                await asyncio.sleep(delay)
             await job(self._adapters, **kwargs)
         except asyncio.CancelledError:
             raise

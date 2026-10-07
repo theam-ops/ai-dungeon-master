@@ -192,6 +192,8 @@ erDiagram
         TEXT code UK "6 chars, the join code"
         TEXT lang "DM narration language"
         TEXT backend "which AI, per campaign"
+        TEXT house "optional table rules, JSON"
+        TEXT combat "the fight in progress, JSON, or empty"
         TEXT history "ENTIRE transcript as JSON"
         REAL last_art "art slot refill clock"
     }
@@ -295,6 +297,9 @@ drive the rules without a web server and the CLI share the same DM.
 | `set_effect` | yes | a named AC effect — bonus, unarmoured base, or floor — with a duration |
 | `use_spell_slot` | yes | spends a slot from the SRD table; *refuses* when none is left |
 | `long_rest` | yes | HP and slots restored, timed effects ended — one character or the party |
+| `roll_initiative` | with a campaign | rolls every player character and the named enemies; mid-fight, adds without moving the turn |
+| `next_turn` | with a campaign | passes the turn, drops the fallen; a new round ticks effect durations |
+| `end_combat` | with a campaign | clears the order |
 | `search_lore` | only with documents | substring search over the campaign library |
 | `draw_scene` | only with an image provider | one slot per `DM_ART_EVERY_TURNS` turns |
 
@@ -479,12 +484,15 @@ count off and mapping the name back through the translation table; anything unre
 is kept as itself. Checked against every character in the live database: nothing lost.
 Covered by `tests/test_items.py`.
 
+**8. Effect durations counted player actions, not rounds.** With five players a 10-turn
+effect ran out five times as fast as with one. In a fight, durations now tick when a
+round ends (`dm._combat`); outside one, they still tick per player action, which is the
+only clock exploration has.
+
 ### Open
 
-**Effect durations count table turns, not combat rounds.** `set_effect`'s `turns` ticks
-once per player action, because there is no initiative or round structure yet. With one
-player that is close to a round; with five it runs out five times faster. Phase 4 adds
-rounds.
+Nothing verified and unfixed at present. Findings from play that were deliberately left
+alone are in `docs/playtest-findings.md`, each with the reason.
 
 ---
 
@@ -497,7 +505,9 @@ The most useful section for a contributor or an agent. These are decisions, not 
 |---|---|
 | **No build step** | `Play.cmd` must work on a machine with Python and nothing else. No npm, no bundler, no `node_modules`. This is load-bearing for how the app is distributed. |
 | **No user accounts** | A signed cookie plus a 6-character code is the whole identity model. Accounts would need email, resets, and a privacy surface for a game six friends play. |
-| **No saving throws, spell slots, or initiative** (yet) | Modelled in the user's own campaign notes and reachable via `search_lore`. Adding them to code is real work with no UI asking for it — until Phase 2 of the plan. |
+| **No monster sheets** | Enemies exist only in the initiative order, by name; the DM keeps their hit points in the narration. Giving every goblin a sheet is a much bigger game than this one, and the player-facing numbers are what need guarding. |
+| **No saving-throw proficiencies** | Saves are rolled through `roll_dice` with the ability modifier the DM is shown. Modelling per-class save proficiencies is real work with no UI asking for it. |
+| **A turn order that never blocks** | Initiative is rolled, shown and handed to the DM, but a player acting out of turn is not refused — the DM is told and fits it in. A strict queue stops the whole table when one friend steps away. `COMBAT_TURN_GRACE` lets a host add a clock instead. |
 | **No OAuth against Claude/GPT/Gemini** | There is no OAuth scope that lets a web app spend somebody else's subscription. Anything claiming otherwise impersonates a browser session, which violates provider terms. The subscription backend drives locally-installed Claude Code instead, and its sign-in endpoints are **loopback-only** — whoever completes that sign-in decides which account pays for every turn. |
 | **No word-based lore search** | Thai is written without spaces between words. Anything that splits on whitespace finds nothing in a Thai document. Plain substring matching is a correctness requirement, not laziness. |
 | **No images in campaign history** | An attached image is sent on the turn it appears, then dropped. Left in, it is re-sent every turn and multiplies the bill silently. |
