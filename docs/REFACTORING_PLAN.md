@@ -34,7 +34,7 @@ Sorted by value per unit of work, not by the order the pillars were listed.
 | 3 | Items as records + equipment | ~1 week | **Done.** |
 | 4 | Combat, initiative, turn queue | ~1 week | **Done.** |
 | 5 | Summarisation worker | ~4 days | **Done.** 88% fewer input tokens over 200 turns. |
-| 6 | SRD retrieval | ~3 days | Cheap; `lore.py` already has the machinery. |
+| 6 | SRD retrieval | ~3 days | **Done.** SRD 5.1, 2,117 sections. |
 | 7 | Frontend ES modules | ~1 week | Pure refactor, no behaviour change. Do before 9. |
 | 8 | Postgres + Redis adapters | ~1.5 weeks | **Only if you actually need >1 process.** |
 | 9 | Battle map, fog of war, audio, TTS | ~3 weeks+ | Roughly doubles the frontend. |
@@ -825,6 +825,28 @@ compacted prefix nearly free — that is where the saving actually comes from.
 ---
 
 ## Phase 6 — SRD retrieval
+
+> **Done.** `game/rulebook.py`, a `lookup_rule` tool, and the SRD 5.1 converted into
+> `data/srd/`. Where it differs from the sketch below:
+>
+> - **5.1, not 5.2.1.** The game's mechanics follow 5.1 (its spell-slot tables, for one);
+>   a 5.2.1 rulebook would have the DM reading rules the dice do not follow.
+> - **Its own search, not `lore.search` over reserved lore rows.** Rules live under headings,
+>   so the search ranks sections: the heading counts most, an exact word beats a shared stem
+>   ("grappled" finds the condition before the action), and a runner-up is kept only if it
+>   scores at least half the best. On 26 typical questions the right section came first
+>   every time. No campaign rows, no foreign key to fake.
+> - **English queries.** The rulebook is English; the DM is told to query in English even
+>   when narrating in Thai. A translation the model does well, and it keeps this keyword
+>   search rather than a vector index. Embeddings remain unbuilt until keyword search fails.
+> - **Converting the PDF took three passes.** The SRD prints headings at five sizes, the
+>   smallest only ten percent above body text - the first pass lost Exhaustion. The page
+>   footer shares that size and is spaced with tabs and non-breaking spaces; it was in the
+>   text 404 times until filtered, sometimes split across runs. `test_rulebook.py` now guards
+>   the shipped conversion: every condition present, the footer gone.
+> - **Attribution** - Wizards' exact sentence - is in `game/rulebook.py`,
+>   `data/srd/ATTRIBUTION.md`, the player reference, and the drawer whenever a rulebook is
+>   installed.
 
 ### 6.1 Licensing first
 

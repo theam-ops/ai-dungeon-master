@@ -635,6 +635,15 @@ you lose 20 ft and roll STR, DEX and CON checks, attacks and saves at disadvanta
 only the carrying limit applies. Anyone at the table can change it, and the feed says who
 did.
 
+**The DM looks rules up.** The game ships with the D&D 5e System Reference Document. When a
+player tries something whose exact rule the DM isn't sure of — grappling, cover, falling, a
+condition, a spell, a monster — it looks the rule up before deciding what happens, and the
+feed shows what it checked, the way it shows a die roll. The rulebook is in English; the DM
+looks things up in English whatever language it narrates in. To fetch it again or update it,
+run `python tools/fetch_srd.py` (it needs `pip install pypdf`).
+
+> This work includes material taken from the System Reference Document 5.1 ("SRD 5.1") by Wizards of the Coast LLC and available at https://dnd.wizards.com/resources/systems-reference-document. The SRD 5.1 is licensed under the Creative Commons Attribution 4.0 International License available at https://creativecommons.org/licenses/by/4.0/legalcode.
+
 **The DM remembers a long campaign.** Every turn used to re-send the whole story so far,
 so a long campaign cost more with every turn and, eventually, outgrew what the model can
 read at once and stopped. Now, once about thirty turns have piled up, the cheapest AI you

@@ -23,6 +23,7 @@ Environment:
                         (default 0: never)
     SUMMARY_KEEP_TURNS  optional - turns sent word for word after the synopsis (default 20)
     SUMMARY_EVERY_TURNS optional - how far past that before condensing again (default 10)
+    DND_RULEBOOK        optional - where the SRD lives (default data/srd)
 
 At least one AI must be reachable: any key above, or a running Ollama.
 """
@@ -45,7 +46,7 @@ from fastapi.responses import (FileResponse, JSONResponse, Response,
 from fastapi.staticfiles import StaticFiles
 from starlette.middleware.sessions import SessionMiddleware
 
-from game import claude_code, i18n, lore, media, providers, rules
+from game import claude_code, i18n, lore, media, providers, rulebook, rules
 from game.adapters import build_adapters
 from game.services import events
 from game.services.events import public_character
@@ -510,6 +511,8 @@ async def campaign_detail(request: Request, cid: str):
         "notes_max": rules.MAX_NOTES_CHARS,
         "house": await A.repo.campaign_house(cid),
         "combat": await A.repo.get_combat(cid),
+        # CC-BY-4.0 asks for this wherever the SRD's text is used
+        "rulebook": rulebook.ATTRIBUTION if rulebook.installed() else None,
         "memory": {k: v for k, v in (await A.repo.get_memory(cid) or {}).items()
                    if k in ("synopsis", "turns")} or None,
         "party": [public_character(c) for c in await A.repo.party(cid)],

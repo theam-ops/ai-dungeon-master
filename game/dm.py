@@ -7,7 +7,7 @@ The model narrates and judges. Every die and every point of damage goes through
 import json
 import os
 
-from . import i18n, lore, providers, rules
+from . import i18n, lore, providers, rulebook, rules
 
 # tokens kept free for the model's answer when a small context is being budgeted
 REPLY_ROOM = 1000
@@ -329,6 +329,31 @@ END_COMBAT_TOOL = {
 
 COMBAT_TOOLS = [INITIATIVE_TOOL, NEXT_TURN_TOOL, END_COMBAT_TOOL]
 
+RULES_PROCEDURE = """\
+LOOKING UP RULES
+- You have the D&D 5e rulebook (SRD 5.1) through lookup_rule. When a player tries something
+  whose exact rule you are not sure of - grappling, shoving, cover, falling, a condition's
+  effects, a spell's details - look it up before you narrate how it turns out.
+- Query in English, whatever language you are narrating in: the rulebook is English.
+- Rule from what it says. When it says nothing, make a ruling, and say that it is one."""
+
+RULES_TOOL = {
+    "name": "lookup_rule",
+    "description": (
+        "Look a rule up in the D&D 5e System Reference Document: conditions, actions in "
+        "combat, cover, falling, resting, a spell or a monster. Returns the sections that "
+        "match. Query in English."
+    ),
+    "strict": True,
+    "input_schema": {
+        "type": "object",
+        "properties": {"query": {"type": "string",
+                                 "description": "e.g. 'grappled', 'half cover', 'fireball'"}},
+        "required": ["query"],
+        "additionalProperties": False,
+    },
+}
+
 # Only offered to the DM when the campaign has documents to search - a tool with nothing
 # behind it is worse than no tool, because the model will still reach for it.
 LORE_TOOL = {
@@ -395,6 +420,8 @@ async def tools_for(cid, repo=None):
         raise ValueError("tools_for for a campaign needs its repository - pass repo=, from the adapters")
     if cid:
         tools.extend(COMBAT_TOOLS)     # a fight lives on the campaign, so needs one
+    if rulebook.installed():           # no rulebook, no tool: it would only ever fail
+        tools.append(RULES_TOOL)
     if cid and await repo.lore_documents(cid):
         tools.append(LORE_TOOL)
     # no campaign means no feed and nowhere to file the picture - that is the terminal
@@ -622,6 +649,12 @@ async def run_tool(name, args, characters, lang="en", cid=None, repo=None, house
     if name == "draw_scene":
         return await _draw_scene(args, cid, repo)
 
+    if name == "lookup_rule":
+        query = (args.get("query") or "").strip()[:120]
+        found, titles = rulebook.search(query)
+        # the table sees what was checked, the way it sees a die roll
+        return found, ({"kind": "rule", "query": query, "found": titles} if titles else None)
+
     if name == "roll_dice":
         try:
             total, detail, crit = rules.roll_notation(args.get("notation"),
@@ -770,6 +803,8 @@ async def system_blocks(lang, cid=None, repo=None, synopsis=None):
         blocks.append({"type": "text", "text": extra})
     # with the initiative tools the DM runs the order; without them, the fiction does
     blocks.append({"type": "text", "text": COMBAT_PROCEDURE if cid else COMBAT_FICTION})
+    if rulebook.installed():
+        blocks.append({"type": "text", "text": RULES_PROCEDURE})
     if cid:
         if repo is None:
             raise ValueError("system_blocks for a campaign needs its repository - pass repo=, from the adapters")

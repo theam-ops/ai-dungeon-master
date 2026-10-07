@@ -1282,6 +1282,7 @@ async function enterCampaign(id) {
   S.combat = info.combat || null;
   renderHouse();
   renderRecap();
+  renderRulebookCredit();
   S.party = info.party;
   S.backend = info.backend;
   S.notes = info.notes || "";
@@ -1436,6 +1437,11 @@ function handle(ev) {
       renderLive();
       break;
     }
+
+    case "rule":
+      // the DM looked something up in the rulebook - shown like a roll is
+      appendChip(el("div", "lore-chip", t("checked_rules", (ev.found || []).join(", "))));
+      break;
 
     case "memory":
       // the older turns were condensed in the background; nothing to show in the feed
@@ -2056,6 +2062,13 @@ function renderRecap() {
   box.classList.toggle("hidden", !(mem && mem.synopsis));
   $("recap-meta").textContent = mem && mem.synopsis
     ? t("story_so_far_meta", mem.turns) : t("story_so_far_none");
+}
+
+/* The SRD's licence asks for its attribution wherever its text is used. */
+function renderRulebookCredit() {
+  const credit = S.campaign && S.campaign.rulebook;
+  $("rulebook-credit").classList.toggle("hidden", !credit);
+  $("rulebook-attribution").textContent = credit || "";
 }
 
 function renderHouse() {

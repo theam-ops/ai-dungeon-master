@@ -281,6 +281,8 @@ holds the browser half.
 | `game/rules.py` | 526 | **dice, abilities, skills, AC, character gen — no I/O** | — |
 | `game/media.py` | 286 | image validation, EXIF stripping, SSRF guards, file store | — |
 | `game/lore.py` | 198 | encoding detection, HTML→text, substring search | — |
+| `game/rulebook.py` | 156 | the SRD: sections by heading, ranked keyword search | `data/srd/*.md` |
+| `tools/fetch_srd.py` | 151 | downloads the SRD 5.1 PDF and converts it to `data/srd/` | — |
 | `game/i18n.py` | 179 | server strings: gear, narration instruction, CLI | — |
 | `static/app.js` | 1975 | the entire UI | — |
 | `static/i18n.js` | 511 | browser strings, en + th | — |
@@ -304,6 +306,7 @@ drive the rules without a web server and the CLI share the same DM.
 | `roll_initiative` | with a campaign | rolls every player character and the named enemies; mid-fight, adds without moving the turn |
 | `next_turn` | with a campaign | passes the turn, drops the fallen; a new round ticks effect durations |
 | `end_combat` | with a campaign | clears the order |
+| `lookup_rule` | when a rulebook is installed | section-aware search of the SRD 5.1 in `data/srd/` |
 | `search_lore` | only with documents | substring search over the campaign library |
 | `draw_scene` | only with an image provider | one slot per `DM_ART_EVERY_TURNS` turns |
 

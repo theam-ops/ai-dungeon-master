@@ -124,7 +124,7 @@ def test_claude_code_is_offered_exactly_this_campaigns_tools(fake_sdk):
     offered = {t.split("__")[-1] for t in sdk.offered}
     assert offered == {"roll_dice", "update_character", "equip_armor", "set_effect",
                        "use_spell_slot", "long_rest", "roll_initiative", "next_turn",
-                       "end_combat"}
+                       "end_combat", "lookup_rule"}
     assert all(t.startswith(f"mcp__{claude_code.MCP_SERVER}__") for t in sdk.offered)
 
 
