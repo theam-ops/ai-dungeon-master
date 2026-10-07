@@ -291,15 +291,19 @@ The cheap fix is client-side: `handle()` already tracks `lastSeq`, so noticing
 heal it. Left alone because it touches the delta/narration rendering path in `app.js` and
 wants a browser to test in, which this pass did not have.
 
-### E. Two module-level defaultdicts never shrink
+### E. Two module-level defaultdicts never shrink — FIXED
 
-`server.subscribers` and `server.locks` gain an entry per campaign id ever touched and lose
-none — including for campaigns that are subsequently deleted. Each entry is tiny, but this is
-a server meant to stay up for months. `broadcast` also creates a `subscribers[cid]` entry for
-any id it is handed. Left alone: fixing it correctly means knowing when the last subscriber
-has gone *and* no turn is in flight, which is more coordination than the leak is worth today.
+`server.subscribers` and `server.locks` gained an entry per campaign id ever touched and lost
+none — including for campaigns that were subsequently deleted. `broadcast` also created a
+`subscribers[cid]` entry for any id it was handed. This was left alone at first because
+fixing it means knowing when the last subscriber has gone *and* no turn is in flight.
 
-Test: `test_known_locks_and_subscribers_are_never_cleaned_up`.
+Fixed when that state moved behind the ports (`game/adapters/lite.py`), since the adapter is
+where both are known. A lock counts its holders *and* waiters and is dropped at zero, so a
+turn queued behind another keeps the lock alive. A campaign's subscriber set goes with its
+last watcher, and publishing to an id nobody watches creates nothing.
+
+Tests: `test_locks_and_subscriptions_are_let_go`, and `tests/test_adapters.py`.
 
 ### F. The rate limit is per table, so one player can lock everyone out
 

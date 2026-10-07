@@ -60,6 +60,23 @@ Flags: `--hp` (negative is damage), `--xp`, `--gold`, `--add`, `--remove`,
 300 XP is level 2, 900 is level 3, 2700 is level 4. At 0 HP the character falls
 unconscious and rolls death saves.
 
+**Armour class is calculated, never stated.** It comes from the armour and shield the
+character wears, their DEX, and any effects on them; the sheet shows the working
+(`chain mail 16, DEX +0, shield +2`). Read AC from there, never add it up yourself.
+
+```
+python play.py update Vess --add "chain shirt" --wear "chain shirt"
+python play.py update Vess --unwear shield
+python play.py update Bram --effect "Shield of Faith" --ac-bonus 2 --turns 10
+python play.py update Ilse --effect "Mage Armor" --ac-base 13
+python play.py update Bram --end-effect "Shield of Faith"
+```
+
+An item must be carried before it can be worn - `--add` it first, in the same call if
+they have just picked it up. `--ac-base` replaces the unarmoured base and does nothing
+while armour is worn; `--ac-min` is a floor (barkskin: 16). Removing worn armour with
+`--remove` takes it off, and AC drops with it.
+
 If the tool's output contradicts something you just narrated, correct yourself in the
 next line. The tool is the truth.
 

@@ -13,7 +13,8 @@ that machine owner's subscription. Friends who join over a tunnel play on the ho
 DM, exactly as they already do for every other backend.
 
 Because Claude Code drives its own tool loop, `roll_dice` and `update_character` are
-exposed to it as an in-process MCP server whose handlers call straight into `dm.run_tool`.
+exposed to it as an in-process MCP server whose handlers call the `call_tool` the DM
+loop lends it - which is `dm.run_tool`, bound to this campaign's characters and storage.
 The dice are still rolled in Python; nothing about the rules moves into the model.
 
 Requires:
@@ -275,15 +276,14 @@ class ClaudeCodeBackend(providers.Backend):
                            "backend instead")
         return True, ""
 
-    def _options(self, system, mcp, cid=None):
+    def _options(self, system, mcp, tools):
         """Claude Code stripped down to a DM: no file access, no shell, no settings.
 
         `tools=[]` removes every built-in tool, so the only things the model can call
         are this game's two. `setting_sources=None` keeps the host's CLAUDE.md, hooks
         and MCP servers out of the campaign.
         """
-        from . import dm
-        allowed = [f"mcp__{MCP_SERVER}__{spec['name']}" for spec in dm.tools_for(cid)]
+        allowed = [f"mcp__{MCP_SERVER}__{spec['name']}" for spec in tools]
         return ClaudeAgentOptions(
             model=self.model,
             system_prompt=system,
@@ -297,24 +297,23 @@ class ClaudeCodeBackend(providers.Backend):
             max_turns=providers_max_turns(),
         )
 
-    def _tool_server(self, characters, lang, events, cid=None):
+    def _tool_server(self, tools, call_tool, events):
         """This campaign's tools, wired to the same `dm.run_tool` every backend uses."""
-        from . import dm
 
         def run(name):
             async def handler(args):
-                out, event = dm.run_tool(name, dict(args or {}), characters, lang, cid)
+                out, event = await call_tool(name, dict(args or {}))
                 if event:
                     events.put_nowait(event)
                 return {"content": [{"type": "text", "text": out}]}
             return handler
 
         built = [tool(spec["name"], spec["description"], spec["input_schema"])(run(spec["name"]))
-                 for spec in dm.tools_for(cid)]
+                 for spec in tools]
         return create_sdk_mcp_server(MCP_SERVER, "1.0.0", built)
 
     async def run_turn(self, system_blocks, history, characters, lang, images=None,
-                       cid=None):
+                       cid=None, tools=(), call_tool=None):
         """One DM turn, start to finish, yielding the same events as `dm._run`.
 
         Claude Code runs its own tool loop, so unlike `Backend.stream` this covers the
@@ -336,7 +335,7 @@ class ClaudeCodeBackend(providers.Backend):
             async for message in query(
                     prompt=prompt,
                     options=self._options(
-                        system, self._tool_server(characters, lang, events, cid), cid)):
+                        system, self._tool_server(tools, call_tool, events), tools)):
                 while not events.empty():
                     yield events.get_nowait()
 

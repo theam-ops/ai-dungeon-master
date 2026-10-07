@@ -142,25 +142,25 @@ async def settle():
 
 def test_no_artist_means_no_tool(registry, campaign):
     registry(StubDM([]))
-    assert "draw_scene" not in [t["name"] for t in dm.tools_for(campaign)]
+    assert "draw_scene" not in [t["name"] for t in asyncio.run(dm.tools_for(campaign, repo=server.A.repo))]
 
 
 def test_an_artist_puts_the_tool_on_the_table(registry, campaign):
     registry(StubDM([]), StubArtist())
-    assert "draw_scene" in [t["name"] for t in dm.tools_for(campaign)]
+    assert "draw_scene" in [t["name"] for t in asyncio.run(dm.tools_for(campaign, repo=server.A.repo))]
 
 
 def test_the_terminal_client_is_not_offered_it(registry):
     """No campaign means no feed to put a picture in - dnd.py is text and stays text."""
     registry(StubDM([]), StubArtist())
-    assert "draw_scene" not in [t["name"] for t in dm.tools_for(None)]
+    assert "draw_scene" not in [t["name"] for t in asyncio.run(dm.tools_for(None))]
 
 
 def test_calling_it_anyway_is_an_error_not_a_crash(registry, campaign):
     """The tool is withheld, but a model can still name it. It must not blow up."""
     registry(StubDM([]))
-    out, event = dm.run_tool("draw_scene", {"prompt": "a door", "caption": ""},
-                             [], "en", campaign)
+    out, event = asyncio.run(dm.run_tool("draw_scene", {"prompt": "a door", "caption": ""},
+                             [], "en", campaign, repo=server.A.repo))
     assert event is None
     assert out.startswith("ERROR")
 
@@ -175,10 +175,10 @@ def test_the_second_picture_is_refused_inside_the_window(registry, campaign, mon
     monkeypatch.setattr(dm, "ART_EVERY_TURNS", 3)
     ask = {"prompt": "a black door", "caption": "The door"}
 
-    out, event = dm.run_tool("draw_scene", dict(ask), [], "en", campaign)
+    out, event = asyncio.run(dm.run_tool("draw_scene", dict(ask), [], "en", campaign, repo=server.A.repo))
     assert event and event["kind"] == "draw"
 
-    out, event = dm.run_tool("draw_scene", dict(ask), [], "en", campaign)
+    out, event = asyncio.run(dm.run_tool("draw_scene", dict(ask), [], "en", campaign, repo=server.A.repo))
     assert event is None
     assert out.startswith("NOT NOW")
 
@@ -188,7 +188,7 @@ def test_the_slot_comes_back_after_enough_player_turns(registry, campaign, monke
     monkeypatch.setattr(dm, "ART_EVERY_TURNS", 3)
     ask = {"prompt": "a black door", "caption": "The door"}
 
-    assert dm.run_tool("draw_scene", dict(ask), [], "en", campaign)[1]
+    assert asyncio.run(dm.run_tool("draw_scene", dict(ask), [], "en", campaign, repo=server.A.repo))[1]
 
     # the slot counts player turns logged after it was claimed, and both timestamps
     # come from the same clock - so put daylight between them rather than trusting
@@ -196,10 +196,10 @@ def test_the_slot_comes_back_after_enough_player_turns(registry, campaign, monke
     time.sleep(0.02)
     for _ in range(2):
         store.append_event(campaign, "player", {"character": "Vess", "text": "onward"})
-    assert dm.run_tool("draw_scene", dict(ask), [], "en", campaign)[1] is None
+    assert asyncio.run(dm.run_tool("draw_scene", dict(ask), [], "en", campaign, repo=server.A.repo))[1] is None
 
     store.append_event(campaign, "player", {"character": "Vess", "text": "onward"})
-    assert dm.run_tool("draw_scene", dict(ask), [], "en", campaign)[1]
+    assert asyncio.run(dm.run_tool("draw_scene", dict(ask), [], "en", campaign, repo=server.A.repo))[1]
 
 
 def test_the_limit_holds_across_whole_turns(registry, campaign, monkeypatch):
@@ -216,7 +216,7 @@ def test_the_limit_holds_across_whole_turns(registry, campaign, monkeypatch):
     async def play():
         for i in range(3):
             store.append_event(campaign, "player", {"character": "Vess", "text": "go"})
-            await server.run_dm_turn(campaign, "Vess", "I go on")
+            await server.run_dm_turn(server.A, campaign, "Vess", "I go on")
             await settle()
 
     asyncio.run(play())
@@ -240,7 +240,7 @@ def test_a_drawn_scene_lands_in_the_feed(registry, campaign):
     store.set_campaign_backend(campaign, brain.id)
 
     async def play():
-        await server.run_dm_turn(campaign, "Vess", "I push the door")
+        await server.run_dm_turn(server.A, campaign, "Vess", "I push the door")
         await settle()
 
     asyncio.run(play())
@@ -274,7 +274,7 @@ def test_the_campaign_image_cap_still_applies(registry, campaign, monkeypatch):
     store.set_campaign_backend(campaign, brain.id)
 
     async def play():
-        await server.run_dm_turn(campaign, "Vess", "I push the door")
+        await server.run_dm_turn(server.A, campaign, "Vess", "I push the door")
         await settle()
 
     asyncio.run(play())
@@ -302,7 +302,7 @@ def test_a_failing_artist_leaves_the_turn_intact(registry, campaign, failure):
     store.set_campaign_backend(campaign, brain.id)
 
     async def play():
-        await server.run_dm_turn(campaign, "Vess", "I push the door")
+        await server.run_dm_turn(server.A, campaign, "Vess", "I push the door")
         await settle()
 
     asyncio.run(play())
@@ -333,7 +333,7 @@ def test_drawing_does_not_stall_the_turn(registry, campaign):
         # until the test released the artist, which is exactly the bug: fail rather
         # than hang, so the reason shows up in the output
         await asyncio.wait_for(
-            server.run_dm_turn(campaign, "Vess", "I push the door"), timeout=10)
+            server.run_dm_turn(server.A, campaign, "Vess", "I push the door"), timeout=10)
 
         # the turn is over; the artist has not finished, and must not have been
         # allowed to hold the table up while it worked

@@ -99,62 +99,137 @@ def process(raw, kind="handout"):
 # fetching a URL the player pasted
 # --------------------------------------------------------------------------- #
 
-def _is_public(host):
-    """Refuse anything that resolves inside the network the server is sitting on.
+# Ports with no business serving an image, and plenty of business being probed.
+BLOCKED_PORTS = {22, 23, 25, 110, 143, 445, 3306, 5432, 6379, 11211, 27017}
+MAX_REDIRECTS = 3
+CHUNK = 64 * 1024
 
-    Without this, 'paste a URL' hands anyone a way to make the server fetch its own
-    localhost, a private LAN box, or a cloud metadata endpoint and hand back the result.
+
+def _refuse(ip):
+    """Is this an address the server has no business reaching?"""
+    if (ip.is_private or ip.is_loopback or ip.is_link_local or ip.is_reserved
+            or ip.is_multicast or ip.is_unspecified):
+        return True
+    # ::ffff:10.0.0.1 is a private address wearing an IPv6 coat
+    mapped = getattr(ip, "ipv4_mapped", None)
+    return bool(mapped is not None and _refuse(mapped))
+
+
+def resolve_public(host, port):
+    """Resolve `host` once and return the addresses we are willing to talk to.
+
+    Returning the addresses, rather than a yes-or-no, is the whole point: the caller
+    connects to one of *these*. Checking a name and then handing the same name to an
+    HTTP client lets a hostile DNS server answer twice - a public address for the
+    check and 169.254.169.254 for the fetch - and only the first answer gets looked at.
     """
+    if port in BLOCKED_PORTS:
+        raise MediaError("that address isn't allowed")
     try:
-        infos = socket.getaddrinfo(host, None)
+        infos = socket.getaddrinfo(host, port, type=socket.SOCK_STREAM)
     except socket.gaierror:
         raise MediaError("couldn't look up that address")
+
+    addresses = []
     for info in infos:
         ip = ipaddress.ip_address(info[4][0])
-        if (ip.is_private or ip.is_loopback or ip.is_link_local or ip.is_reserved
-                or ip.is_multicast or ip.is_unspecified):
+        if _refuse(ip):
+            # fail closed: a name that resolves anywhere private is refused outright,
+            # rather than quietly using whichever of its addresses looked acceptable
             raise MediaError("that address isn't allowed")
-    return True
+        addresses.append(str(ip))
+    if not addresses:
+        raise MediaError("couldn't look up that address")
+    return addresses
 
 
-def fetch(url, kind="handout"):
-    """Download an image from a URL the player supplied, with the obvious guardrails."""
-    parsed = urlparse(url or "")
+def _host_header(url):
+    """The Host the origin expects: the real name, bracketed if it is IPv6."""
+    host = url.host
+    if ":" in host:
+        host = f"[{host}]"
+    return host if url.port is None else f"{host}:{url.port}"
+
+
+def _get_pinned(client, url):
+    """GET `url`, connecting to an address we resolved and validated ourselves.
+
+    The request travels to the IP while `Host` and the TLS server name stay the real
+    hostname, so virtual hosting and certificate verification behave normally - and
+    there is no second lookup for DNS to answer differently.
+    """
+    parsed = httpx.URL(url)
     if parsed.scheme not in ("http", "https"):
         raise MediaError("the link must start with http:// or https://")
-    if not parsed.hostname:
+    if not parsed.host:
         raise MediaError("that doesn't look like a link")
-    _is_public(parsed.hostname)
 
+    default_port = 443 if parsed.scheme == "https" else 80
+    ip = resolve_public(parsed.host, parsed.port or default_port)[0]
+    request = client.build_request(
+        "GET", parsed.copy_with(host=ip),
+        headers={"Host": _host_header(parsed), "Accept": "image/*"},
+        extensions={"sni_hostname": parsed.host},
+    )
     try:
-        with httpx.Client(timeout=20, follow_redirects=False) as http:
-            seen = 0
-            target = url
-            while True:
-                r = http.get(target, headers={"Accept": "image/*"})
-                if r.status_code in (301, 302, 303, 307, 308):
-                    seen += 1
-                    if seen > 3:
-                        raise MediaError("that link redirects too many times")
-                    target = str(r.next_request.url) if r.next_request else None
-                    if not target:
-                        raise MediaError("that link went nowhere")
-                    # every hop gets checked: a public URL can redirect to a private one
-                    hop = urlparse(target)
-                    if hop.scheme not in ("http", "https") or not hop.hostname:
-                        raise MediaError("that link redirects somewhere unsupported")
-                    _is_public(hop.hostname)
-                    continue
-                break
+        return client.send(request, stream=True)
     except httpx.HTTPError as e:
         raise MediaError(f"couldn't fetch that link ({type(e).__name__})")
 
-    if r.status_code >= 400:
-        raise MediaError(f"that link returned HTTP {r.status_code}")
-    if len(r.content) > MAX_UPLOAD_BYTES:
-        raise MediaError(f"that image is over {MAX_UPLOAD_BYTES // (1024 * 1024)}MB")
 
-    return process(r.content, kind)
+def _read_capped(response, cap=None):
+    """Read a streaming response, stopping the moment it goes over the cap.
+
+    `len(response.content)` buffers the whole body before anyone can object, which
+    is an out-of-memory button for anybody who can get a URL past validation.
+    """
+    cap = MAX_UPLOAD_BYTES if cap is None else cap
+    too_big = f"that image is over {cap // (1024 * 1024)}MB"
+
+    declared = response.headers.get("content-length", "")
+    if declared.isdigit() and int(declared) > cap:
+        raise MediaError(too_big)
+
+    chunks, total = [], 0
+    try:
+        for chunk in response.iter_bytes(CHUNK):
+            total += len(chunk)
+            if total > cap:            # content-length is a hint, not a promise
+                raise MediaError(too_big)
+            chunks.append(chunk)
+    except httpx.HTTPError as e:
+        raise MediaError(f"couldn't fetch that link ({type(e).__name__})")
+    return b"".join(chunks)
+
+
+def fetch(url, kind="handout"):
+    """Download an image from a URL a player supplied, with the obvious guardrails."""
+    with httpx.Client(timeout=httpx.Timeout(10.0, read=20.0),
+                      follow_redirects=False) as http:
+        target = url
+        for _ in range(MAX_REDIRECTS + 1):
+            response = _get_pinned(http, target)
+            if response.status_code in (301, 302, 303, 307, 308):
+                location = response.headers.get("location")
+                response.close()
+                if not location:
+                    raise MediaError("that link went nowhere")
+                # every hop is resolved and validated afresh by _get_pinned: a public
+                # URL is allowed to redirect, but not to somewhere private
+                target = str(httpx.URL(target).join(location))
+                continue
+            try:
+                if response.status_code >= 400:
+                    raise MediaError(f"that link returned HTTP {response.status_code}")
+                ctype = response.headers.get("content-type", "").split(";")[0].strip()
+                if ctype and not ctype.startswith("image/"):
+                    # defence in depth; Pillow's decode below is the real check
+                    raise MediaError("that link isn't an image")
+                raw = _read_capped(response)
+            finally:
+                response.close()     # a streamed response holds its connection open
+            return process(raw, kind)
+    raise MediaError("that link redirects too many times")
 
 
 # --------------------------------------------------------------------------- #

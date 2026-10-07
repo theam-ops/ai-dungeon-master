@@ -8,6 +8,7 @@ import json
 import os
 import random
 import sqlite3
+import threading
 import string
 import time
 
@@ -22,7 +23,7 @@ CODE_ALPHABET = "ABCDEFGHJKMNPQRSTUVWXYZ23456789"
 # How much standing detail one player may keep pinned in front of the DM. Every one of
 # these rides on every turn that character takes, so a party of six could otherwise push
 # several thousand characters of preamble ahead of the actual scene.
-MAX_NOTES_CHARS = 600
+MAX_NOTES_CHARS = rules.MAX_NOTES_CHARS        # a rule, kept here for old imports
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS campaigns (
@@ -44,6 +45,7 @@ CREATE TABLE IF NOT EXISTS characters (
     name         TEXT NOT NULL,
     data         TEXT NOT NULL,
     notes        TEXT NOT NULL DEFAULT '',
+    portrait     TEXT NOT NULL DEFAULT '',
     created_at   REAL NOT NULL
 );
 
@@ -86,24 +88,58 @@ CREATE INDEX IF NOT EXISTS idx_characters_campaign ON characters(campaign_id);
 
 
 def connect():
-    conn = sqlite3.connect(DB_PATH, check_same_thread=False)
+    # check_same_thread stays ON. This module once switched it off to share a single
+    # connection everywhere; that only hid the danger. Now a connection belongs to one
+    # thread, and handing it to another fails loudly instead of interleaving quietly.
+    conn = sqlite3.connect(DB_PATH, timeout=10)
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA journal_mode=WAL")
     conn.execute("PRAGMA foreign_keys=ON")
     return conn
 
 
-_conn = None
+_local = threading.local()
+_open = []                     # every connection handed out, so close_all can find them
+_open_lock = threading.Lock()
+_ready = set()                 # database paths whose schema is known to be current
 
 
 def db():
-    global _conn
-    if _conn is None:
-        _conn = connect()
-        _conn.executescript(SCHEMA)
-        _migrate(_conn)
-        _conn.commit()
-    return _conn
+    """This thread's connection to the database.
+
+    Today every store call runs on the event loop's thread. But image work already
+    runs in worker threads, and the day a store call joins it should not depend on
+    somebody noticing that a shared connection is unsafe across threads.
+    """
+    conn = getattr(_local, "conn", None)
+    if conn is not None and _local.path == DB_PATH:
+        return conn
+    conn = connect()
+    with _open_lock:
+        # once per database file, under the lock: two threads racing _migrate would
+        # both see a column missing and the second ALTER TABLE would fail
+        if DB_PATH not in _ready:
+            conn.executescript(SCHEMA)
+            _migrate(conn)
+            conn.commit()
+            _ready.add(DB_PATH)
+        _open.append(conn)
+    _local.conn, _local.path = conn, DB_PATH
+    return conn
+
+
+def close_all():
+    """Close every connection this process opened - for tests, and for shutdown."""
+    global _local
+    with _open_lock:
+        for conn in _open:
+            try:
+                conn.close()
+            except sqlite3.Error:
+                pass
+        _open.clear()
+        _ready.clear()
+    _local = threading.local()
 
 
 def _migrate(conn):
@@ -298,6 +334,10 @@ def party(cid):
         # characters made before skills existed have no `skills` key at all; give them
         # their class's, here rather than in a migration, since it lives in the blob
         rules.ensure_skills(ch)
+        # likewise armour: AC is derived now, so a character saved under the old frozen
+        # formula is put in its starting armour and recomputed on first load
+        rules.ensure_equipment(ch)
+        rules.recompute_ac(ch)
         out.append(ch)
     return out
 

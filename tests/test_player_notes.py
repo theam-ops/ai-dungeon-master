@@ -55,8 +55,8 @@ def test_notes_survive_a_sheet_change():
     campaign = store.create_campaign("The Salt Road")
     party = make_party(campaign["id"], ("Vess", "Elf", "Rogue", VESS_NOTES))
 
-    dm.run_tool("update_character",
-                {"character_name": "Vess", "hp_change": -3, "reason": "a ghoul"}, party)
+    asyncio.run(dm.run_tool("update_character",
+                {"character_name": "Vess", "hp_change": -3, "reason": "a ghoul"}, party))
     store.save_party(party)
 
     stored = store.party(campaign["id"])[0]
@@ -203,7 +203,7 @@ def test_a_players_notes_are_not_handed_to_the_rest_of_the_table(stub):
         assert all("notes" not in c for c in detail["party"])
         assert VESS_NOTES not in str(detail)
 
-        assert VESS_NOTES not in str(server.party_payload(campaign["id"]))
+        assert VESS_NOTES not in str(asyncio.run(server.party_payload(campaign["id"])))
 
 
 def test_a_stranger_cannot_write_notes_into_a_campaign(stub):

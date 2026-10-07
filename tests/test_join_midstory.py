@@ -153,7 +153,10 @@ def test_the_whole_story_replays_however_long_it_is():
         store.append_event(cid, "narration", {"text": f"scene {i}"})
 
     assert len(store.events_since(cid, 0)) == 500          # one read is still capped
-    got = list(server.replay(cid, 0))
+    async def collect():
+        return [event async for event in server.replay(cid, 0)]
+
+    got = asyncio.run(collect())
 
     assert [e["text"] for e in got] == [f"scene {i}" for i in range(1200)]
     assert [e["seq"] for e in got] == sorted(e["seq"] for e in got)

@@ -50,25 +50,23 @@ Three consequences that constrain every design decision:
 ```mermaid
 graph TB
     subgraph Browser["Browser (no build step)"]
-        UI["static/app.js<br/>1 file, 1952 lines"]
-        I18N["static/i18n.js<br/>en + th"]
+        UI["static/app.js"]
         SSE["EventSource<br/>tracks last seq"]
     end
 
-    subgraph Process["Single uvicorn process"]
-        API["server.py<br/>40 endpoints"]
-        SUBS["subscribers: dict[cid, set[Queue]]<br/>IN MEMORY"]
-        LOCKS["locks: dict[cid, asyncio.Lock]<br/>IN MEMORY"]
-        DM["game/dm.py<br/>prompt + 4 tools"]
+    subgraph Process["One uvicorn process (DND_MODE=lite)"]
+        API["server.py<br/>HTTP: auth, endpoints"]
+        SVC["game/services/<br/>the turn, events"]
+        DM["game/dm.py<br/>prompt + tools"]
         RULES["game/rules.py<br/>pure, no I/O"]
         PROV["game/providers.py<br/>6 backends + failover"]
-        STORE["game/store.py<br/>one shared connection"]
+        PORTS{{"game/ports.py<br/>EventBus · LockManager<br/>TaskQueue · Repository"}}
+        LITE["game/adapters/lite.py<br/>asyncio queues, locks, tasks<br/>SQLite via store.py"]
     end
 
     subgraph Disk
         DB[("campaign.db<br/>SQLite WAL")]
         MEDIA[("media/&lt;cid&gt;/&lt;sha256&gt;.ext")]
-        KEYS[(".keys.json")]
     end
 
     subgraph External["AI providers"]
@@ -78,32 +76,39 @@ graph TB
     end
 
     UI --> API
-    SSE -.->|"GET /stream"| SUBS
-    API --> LOCKS --> DM
-    DM --> RULES
-    DM --> PROV
-    PROV --> CA & CC & OTHER
-    API --> STORE --> DB
+    SSE -.->|"GET /stream"| API
+    API --> SVC
+    API --> PORTS
+    SVC --> PORTS
+    SVC --> DM --> RULES
+    DM --> PROV --> CA & CC & OTHER
+    DM -->|"repo, lent by the turn"| PORTS
+    PORTS --> LITE --> DB
     API --> MEDIA
-    PROV --> KEYS
-    SUBS -.->|"push"| SSE
 
-    style SUBS fill:#5a2d2d,color:#fff
-    style LOCKS fill:#5a2d2d,color:#fff
+    style PORTS fill:#2d3d5a,color:#fff
+    style LITE fill:#5a2d2d,color:#fff
 ```
 
-The two red boxes are why this is **one process, not a cluster**. `subscribers` and
-`locks` are process-local dicts keyed by campaign id. Run two instances behind a load
-balancer and:
+Everything that used to pin the server to a single process - who is watching a campaign,
+whose turn it is, the guard on the opening scene, background tasks - now lives behind the
+ports in `game/ports.py`. In `lite` mode the adapters (red) are still in-process, which is
+what `lite` means: one machine, nothing to install. The difference is that it is now one
+file's worth of decision rather than a property of the whole server.
+
+Run two `lite` instances behind a load balancer and the old problems are all still there:
 
 - a narration streamed by the instance handling the turn never reaches players whose SSE
   connection landed on the other instance;
 - two players acting at once on different instances take the same turn twice, because
-  neither `asyncio.Lock` knows about the other.
+  neither instance's lock knows about the other.
 
-This is an architectural property, not a configuration mistake. It is the reason
-serverless hosting (Vercel, Netlify, Lambda) cannot run this application at all, and the
-reason the [target architecture](#target-architecture) exists.
+`DND_MODE=prod` - Postgres and Redis adapters, Phase 8 of the plan - is what removes them.
+It does not exist yet, and `build_adapters("prod")` says so rather than half-working. This
+is also why serverless hosting (Vercel, Netlify, Lambda) still cannot run this application.
+
+Slow image work — fetching a pasted link, decoding an upload — runs in worker threads via
+`asyncio.to_thread`, never on the loop. The store gives each thread its own connection.
 
 ---
 
@@ -115,12 +120,12 @@ The heart of the system. `POST /api/campaigns/{cid}/act`.
 sequenceDiagram
     actor P as Player
     participant API as server.py
-    participant L as locks[cid]
+    participant L as adapters.locks
     participant DM as dm.py
     participant R as rules.py
     participant AI as provider
-    participant DB as store.py
-    participant S as subscribers[cid]
+    participant DB as adapters.repo
+    participant S as adapters.bus
 
     P->>API: POST /act {action, media_ids}
     API->>DB: turns_in_last_minute(cid)
@@ -236,7 +241,8 @@ carries an opaque `player_token`. That token is what owns a character row. Conse
 - Clearing cookies orphans your character — which is why "pick an existing character"
   exists on the join screen (`store.claim_character`).
 - Anyone with the campaign code can join and see all its media. This is stated in the
-  README because it matters before you upload a photo of a real person.
+  player reference (docs/reference.md) because it matters before you upload a photo
+  of a real person.
 - `APP_PASSWORD` is a single shared door for the whole instance, not per-user auth.
 
 ### Language
@@ -255,23 +261,28 @@ holds the browser half.
 
 ## Module map
 
-| File | Lines | Owns | Imports |
+| File | Lines | Owns | Reaches storage through |
 |---|---|---|---|
-| `server.py` | 1210 | FastAPI: auth, campaigns, SSE, turn loop, media, import/export | everything |
+| `server.py` | 1154 | HTTP: auth, endpoints, media, import/export | `A`, the server's adapters |
+| `game/services/turn.py` | 129 | the DM turn as a queued job; effect expiry | the adapters it is handed |
+| `game/services/events.py` | 34 | publish (logged) vs broadcast (transient) | the adapters it is handed |
+| `game/ports.py` | 223 | the four interfaces — nothing else | — |
+| `game/adapters/lite.py` | 174 | in-process bus, locks, queue; SQLite repository | `store.py` |
 | `game/providers.py` | 844 | 6 backends, format translation, failover, key storage | — |
-| `game/store.py` | 611 | every SQLite touch | `rules` |
-| `game/dm.py` | 476 | system prompt, tool schemas, tool execution, prompt assembly | `rules`, `store`, `lore` |
-| `game/claude_code.py` | 421 | Claude Pro/Max backend + its sign-in flow | `providers` |
-| `game/rules.py` | 228 | **dice, abilities, skills, character gen — no I/O** | `i18n` |
-| `game/media.py` | 211 | image validation, EXIF stripping, SSRF guards, file store | — |
+| `game/store.py` | 651 | every SQLite statement; one connection per thread | SQLite |
+| `game/dm.py` | 629 | system prompt, tool schemas, tool execution, prompt assembly | the `repo` the turn lends it |
+| `game/claude_code.py` | 420 | Claude Pro/Max backend + its sign-in flow | the `call_tool` the DM lends it |
+| `game/rules.py` | 526 | **dice, abilities, skills, AC, character gen — no I/O** | — |
+| `game/media.py` | 286 | image validation, EXIF stripping, SSRF guards, file store | — |
 | `game/lore.py` | 198 | encoding detection, HTML→text, substring search | — |
 | `game/i18n.py` | 179 | server strings: gear, narration instruction, CLI | — |
-| `static/app.js` | 1952 | the entire UI | — |
-| `static/i18n.js` | 488 | browser strings, en + th | — |
-| `dnd.py` / `play.py` | 319 / 237 | terminal client / tool CLI | `game.*` |
+| `static/app.js` | 1975 | the entire UI | — |
+| `static/i18n.js` | 511 | browser strings, en + th | — |
+| `dnd.py` / `play.py` | 322 / 272 | terminal client / tool CLI | none — no campaign |
 
 **Dependency direction is strictly inward.** `rules.py` depends on nothing but `i18n`.
-Nothing in `game/` imports `server.py`. Keep it that way: it is what lets the test suite
+Nothing in `game/` imports `server.py`, and nothing above the ports imports what is below
+them — `tests/test_boundaries.py` checks both. Keep it that way: it is what lets the test suite
 drive the rules without a web server and the CLI share the same DM.
 
 ### The DM's tools
@@ -280,6 +291,8 @@ drive the rules without a web server and the CLI share the same DM.
 |---|---|---|
 | `roll_dice` | yes | announces DC, then Python's RNG produces the number |
 | `update_character` | yes | all hp/xp/gold/items/conditions, named to one character |
+| `equip_armor` | yes | carried armour or a shield on or off; AC recomputed in Python |
+| `set_effect` | yes | a named AC effect — bonus, unarmoured base, or floor — with a duration |
 | `search_lore` | only with documents | substring search over the campaign library |
 | `draw_scene` | only with an image provider | one slot per `DM_ART_EVERY_TURNS` turns |
 
@@ -290,6 +303,9 @@ round and confuses the narration. Conditional registration is deliberate.
 ---
 
 ## Target architecture
+
+> **Status:** the ports and the `lite` adapters are built (Phase 2). The `prod` adapters
+> are Phase 8, and should wait until a measurement says one process is not enough.
 
 The goal is to make horizontal scaling *possible* without making the single-host install
 *worse*. Those two requirements are in tension, and the resolution is a port/adapter
@@ -368,135 +384,106 @@ keeps two simultaneous turns from wasting tokens; correctness comes from the log
 
 ## The four ports
 
-```python
-# game/ports.py — no implementation, no infrastructure imports
-from abc import ABC, abstractmethod
-from typing import AsyncIterator, Any
+The interfaces are in [`game/ports.py`](game/ports.py); read that file rather than a copy
+of it here. What follows is what each one promises, and where the real thing differs from
+the first sketch of it.
 
+| Port | Promises | `lite` | Departed from the sketch |
+|---|---|---|---|
+| `EventBus` | `publish(cid, event)`; `async with subscribe(cid) as sub` registered on entry; `sub.next(timeout)` returns `None` on a quiet line | an `asyncio.Queue` per browser | Best effort, by contract: the event log is the guarantee, the bus the fast path. Dropping frames for a stalled subscriber is allowed. |
+| `LockManager` | `async with hold(key)` — a critical section; `claim(key, ttl)` / `release(key)` — a lease | `asyncio.Lock`s, refcounted; a dict of expiries | **Gained `claim`.** Pressing Begin must stay claimed for as long as the opening scene takes to write, which outlives the request — a scoped lock cannot express that. And `hold` has **no timeout**: turns queue behind each other, as they always have. A timeout would have turned "wait your turn" into an error. |
+| `TaskQueue` | `register(name, job)` once at start-up; `enqueue(name, **kwargs)` without waiting | `create_task`, references kept, failures logged | Jobs travel **by name** with plain-data arguments, because a coroutine cannot be sent to another process. A job receives the adapters it should use as its first argument. |
+| `Repository` | every read and write of campaign state, async | delegates to `game/store.py` | 36 methods, mirroring the store. Async even though SQLite is not, so a Postgres adapter changes no caller. |
 
-class EventBus(ABC):
-    """Fan narration out to every browser watching a campaign."""
+### Two things the port boundary is not
 
-    @abstractmethod
-    async def publish(self, cid: str, event: dict[str, Any]) -> None: ...
+**It is not a guarantee against races by itself.** In `lite` mode a repository call never
+actually suspends — `await` on a coroutine with no real I/O inside runs straight through —
+so a check followed by a write is atomic by accident. A networked database yields on every
+call. Read-then-write sequences therefore hold a lock: joining a table (`roster:{cid}`:
+seated already? table full? name taken?) and the image cap (`media:{cid}`).
+`tests/test_ports_races.py` swaps in a repository that yields before every call and checks
+that two people can still not both join as "Bram" — which, without the lock, they could.
 
-    @abstractmethod
-    async def subscribe(self, cid: str) -> AsyncIterator[dict[str, Any]]:
-        """Yields events until the consumer stops iterating."""
+**It is not optional.** `tests/test_boundaries.py` reads the syntax tree of everything
+above the ports and fails if any of it imports `game.store`, an adapter, `sqlite3` or
+`redis`, if a service reaches for the server's global adapters instead of the ones it was
+handed, if anything calls a repository method the port does not declare, or if a job is
+enqueued under a name nobody registered.
 
+### Who gets which adapters
 
-class LockManager(ABC):
-    """Serialise turns within one campaign. Correctness still comes from the
-    event log; this exists so two players don't burn tokens on the same turn."""
-
-    @abstractmethod
-    async def hold(self, key: str, *, timeout: float = 120.0): ...
-    """Async context manager. Raises TimeoutError rather than queueing forever."""
-
-
-class Repository(ABC):
-    """Every persistence call. The only module allowed to know the storage engine."""
-    # campaigns · characters · events · media · lore
-    # mirrors today's game/store.py surface, async
-
-
-class TaskQueue(ABC):
-    """Work too slow for the request: image generation, TTS, summarisation."""
-
-    @abstractmethod
-    async def enqueue(self, job: str, **kwargs) -> str: ...
-
-    @abstractmethod
-    async def result(self, job_id: str) -> dict | None: ...
-```
-
-Implementations live in `game/adapters/{lite,prod}/`. The full bodies, the SSE bridge, and
-the migration order are in [docs/REFACTORING_PLAN.md](docs/REFACTORING_PLAN.md).
+The server builds one `Adapters` at import (`server.fresh_adapters`) and registers its
+jobs on it; the app's lifespan calls `start` and `aclose`. Endpoints use it as `A`.
+Services and jobs never touch `A` — they are handed adapters, so the same job can run on a
+worker process that built its own. The DM is lent `repo` by the turn, and lends Claude
+Code a `call_tool` in turn, so neither reaches back for storage.
 
 ---
 
 ## Known defects
 
-Verified against the code, not inferred. Each is a real present-day bug with the line that
-causes it.
+Verified against the code, not inferred. Fixed ones stay listed, with what fixed them,
+because the reasoning is what stops them coming back.
 
-### 1. AC is frozen at creation — `rules.py:167`
+### Fixed
 
-```python
-"ac": 12 + max(0, modifier(scores["DEX"])),
-```
+**1. AC was frozen at creation.** `new_character` wrote `12 + max(0, DEX mod)` and nothing
+ever touched it again: armour, shields and spells did nothing, `12` had no basis in 5e,
+and the clamp threw away DEX penalties. A starting Fighter in chain mail and a shield
+showed 13 where the rules give 18. AC is now derived — `rules.compute_ac` from worn
+armour, DEX, a shield and named effects — and `ch["ac"]` is only a cache of it. Old saves
+are put in their starting armour and recomputed on load (`ensure_equipment`, the same
+lazy pattern as `ensure_skills`). Covered by `tests/test_armour.py`.
 
-Written once by `new_character` and never recomputed. **Armour does nothing**, shields do
-nothing, spell effects do nothing. Two further errors in that one line:
+**2. The SSRF guard had a DNS-rebinding window.** The hostname was resolved and checked,
+then handed to `httpx`, which resolved it again. A TTL-0 DNS server could answer the
+check with a public address and the fetch with `169.254.169.254`. Now `resolve_public`
+resolves once, and the request is sent to that address with the real name kept in `Host`
+and the TLS SNI, so certificate verification still applies (checked against a live HTTPS
+host, and that a wrong name is refused). Every redirect hop is resolved and pinned the
+same way. Covered by `tests/test_media_security.py`, which fails against the old code.
 
-- `12 +` has no basis in 5e. Unarmoured AC is `10 + DEX`; `12` is an invented baseline.
-- `max(0, ...)` clamps a negative DEX modifier to zero. 5e applies it. A DEX 8 character
-  should be AC 9 unarmoured, not 10.
+**3. Response bodies were buffered before their size was checked.** `len(r.content)` had
+already read the whole body. Bodies now stream with a running count and stop at the cap;
+a declared `Content-Length` over the cap is refused unread; a non-image `Content-Type` is
+refused before Pillow sees it.
 
-The AC tile on the dashboard is therefore inert and slightly wrong. Fixed in Phase 1.
+**4. Slow image work ran on the event loop.** `media.fetch` — blocking network I/O, up to
+30 s a hop over four hops — and `media.process` — Pillow decoding up to 40 megapixels —
+were called straight from `async` endpoints. While one player's pasted link trickled in,
+narration froze for *every table on the server*. All five call sites now go through
+`asyncio.to_thread`. Covered by `tests/test_event_loop.py`, which runs a heartbeat beside
+the request: on the old code it managed one beat in 0.6 s.
 
-### 2. SSRF guard has a DNS-rebinding window — `media.py:120-128`
+**5. One SQLite connection was shared, with thread checks switched off.** An earlier
+version of this document called that a live bug. It was not: every store call ran on the
+event loop's thread, so the connection was in practice serialised. It was a latent one —
+and #4's fix put threads in the process, which is exactly when it would have started to
+bite. Connections are now one per thread with `check_same_thread` left on, so a
+connection that wanders between threads raises instead of interleaving.
+Covered by `tests/test_store_threads.py`.
 
-```python
-_is_public(parsed.hostname)        # resolution #1: validated
-...
-r = http.get(target, ...)          # resolution #2: NOT validated
-```
+**6. The schema was defined in two places.** `characters.portrait` existed only in
+`_migrate`. It is in `SCHEMA` now; `_migrate` remains for databases created before it.
 
-`_is_public` resolves the hostname and checks the IPs, then `httpx` resolves the hostname
-**again** when it connects. An attacker-controlled DNS server with TTL 0 returns a public
-address to the check and `169.254.169.254` to the fetch. The per-redirect-hop re-check has
-the same hole. Fix: resolve once, validate, then connect to the validated IP directly with
-the original `Host` header.
+### Open
 
-### 3. Response body is buffered before its size is checked — `media.py:152`
-
-```python
-if len(r.content) > MAX_UPLOAD_BYTES:
-```
-
-`r.content` has already read the entire response into memory. A malicious or merely broken
-server can stream gigabytes and exhaust the process before this line runs. There is also
-no `Content-Type` check on the response. `process()` validating via Pillow is the real
-defence, so this is availability rather than integrity — but it is trivially exploitable.
-Fix: `stream()` with a running byte counter that aborts at the cap.
-
-### 4. One shared SQLite connection — `store.py:88-107`
-
-```python
-_conn = None
-def db():
-    global _conn
-    if _conn is None:
-        _conn = connect()   # check_same_thread=False
-```
-
-A single module-level connection shared by every concurrent request, with thread checking
-disabled. SQLite serialises writes so this mostly works, but interleaved transactions on
-one connection have no isolation from each other, and a `BEGIN` from one request can
-swallow another's writes. Fix: connection-per-request, or a pool, behind the `Repository`
-port.
-
-### 5. `inventory` holds localised display strings — `rules.py:171`
+**`inventory` holds localised display strings** — `rules.new_character`:
 
 ```python
 "inventory": [i18n.gear(item, lang) for item in kit],
 ```
 
-A Thai campaign stores `"ดาบสั้น"`, not `"shortsword"`. This breaks the project's own
-stated rule that mechanical values are stored in English and translated at display — and
-it means **an equipment system cannot be built by adding an `equipped` flag to these
-strings**, because there is nothing stable to key an armour table against.
+A Thai campaign stores `"ดาบสั้น"`, not `"shortsword"`. This breaks the project's own rule
+that mechanical values are stored in English and translated at display. AC works around
+it — `rules.armour_piece` recognises armour by its translated name — but a general item
+system cannot be built on these strings. See the plan's Phase 3.
 
-This is the finding that shapes the inventory work: items must become records with
-English keys, with a reverse-mapping migration through `i18n.GEAR` for existing saves and
-free-text passthrough for anything unrecognised. See the plan's Phase 3.
-
-### 6. Schema is defined in two places — `store.py:27` and `store.py:109`
-
-`characters.portrait` exists only in `_migrate`, not in `SCHEMA`. A fresh database gets it
-by `ALTER TABLE` immediately after creation. It works, but the table's true shape is now
-the union of two code paths, which is how columns get missed.
+**Effect durations count table turns, not combat rounds.** `set_effect`'s `turns` ticks
+once per player action, because there is no initiative or round structure yet. With one
+player that is close to a round; with five it runs out five times faster. Phase 4 adds
+rounds.
 
 ---
 
@@ -549,6 +536,7 @@ received — not that the function returns the right value in isolation.
 
 ## See also
 
-- [README.md](README.md) — setup, hosting, and every feature, for players
-- [README.th.md](README.th.md) — the same in Thai
+- [README.md](README.md) — how to start playing ([ไทย](README.th.md))
+- [docs/reference.md](docs/reference.md) — every feature, hosting, keys, for players
+  ([ไทย](docs/reference.th.md))
 - [docs/REFACTORING_PLAN.md](docs/REFACTORING_PLAN.md) — phased plan with code

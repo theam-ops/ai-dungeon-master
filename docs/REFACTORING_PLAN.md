@@ -28,9 +28,9 @@ Sorted by value per unit of work, not by the order the pillars were listed.
 
 | # | Phase | Effort | Why here |
 |---|---|---|---|
-| 0 | SSRF rebinding, streaming size cap, connection handling | ~1 day | Live security bugs. No design work needed. |
-| 1 | Dynamic AC + effects | ~2 days | A visibly broken mechanic. Self-contained in `rules.py`. Tests prove it. |
-| 2 | Port boundary (`lite` adapters only) | ~1 week | **The linchpin.** Unblocks 5, 8, 9 and costs nothing at runtime. |
+| 0 | SSRF rebinding, streaming size cap, connection handling | ~1 day | **Done.** Also moved image work off the event loop — see below. |
+| 1 | Dynamic AC + effects | ~2 days | **Done.** |
+| 2 | Port boundary (`lite` adapters only) | ~1 week | **Done.** |
 | 3 | Items as records + equipment | ~1 week | Blocked on 1. Needs the string→key migration. |
 | 4 | Combat, initiative, turn queue | ~1 week | Blocked on 3 (weapons) and 1 (AC). |
 | 5 | Summarisation worker | ~4 days | Blocked on 2. **Pays for itself in tokens.** |
@@ -63,6 +63,13 @@ graph LR
 ---
 
 ## Phase 0 — real bugs, hours each
+
+> **Done.** What shipped differs from the sketch below in two places worth knowing.
+> Connection handling turned out to be a *latent* bug, not a live one — every store call
+> already ran on the event loop's thread. The live bug it was hiding was the event loop
+> itself: `media.fetch` and `media.process` blocked it, stalling every table's narration.
+> Both now run in `asyncio.to_thread`, which is what made per-thread connections
+> necessary. See ARCHITECTURE.md, Known defects.
 
 ### 0.1 Close the DNS-rebinding window
 
@@ -191,6 +198,13 @@ def test_concurrent_writes_do_not_interleave():
 ---
 
 ## Phase 1 — dynamic AC and the effects system
+
+> **Done**, with three departures from the sketch: equipment is an `equipment` slot map
+> pointing at inventory lines rather than item records (those are Phase 3); heavy armour
+> ignores DEX *entirely*, a penalty included, which the sketch's `min(dex, cap)` got wrong;
+> and there is no Barbarian or Monk in this game, so no unarmoured-defence table. Effect
+> durations count table turns until Phase 4 adds rounds. The tool is `equip_armor`, not
+> `equip_item` — it only ever touches armour and shields, and the name should say so.
 
 Replace the frozen integer with a computed value and a breakdown. The breakdown matters:
 the DM narrates from it and the dashboard explains itself.
@@ -372,6 +386,27 @@ def test_state_block_carries_the_breakdown(): ...
 ---
 
 ## Phase 2 — the port boundary
+
+> **Done.** The ports are `game/ports.py`, the lite adapters `game/adapters/lite.py`, the
+> turn `game/services/turn.py`; `server.py` holds no process-local state. Where it differs
+> from the sketch below, and why:
+>
+> - **There were four pieces of process-local state, not three.** A `beginning` set guarded
+>   the opening scene against two simultaneous Begins. It became a `claim`/`release` lease
+>   on `LockManager`, because the guard must outlive the request that takes it.
+> - **`hold` has no timeout.** The sketch's 120 s would have turned a second player's
+>   action during a long turn into an error; turns queue, as they always have.
+> - **Jobs are registered by name.** A coroutine cannot cross a process boundary.
+> - **Async storage exposed two latent races** — two joiners taking one name, uploads past
+>   the image cap. In lite they cannot happen (the SQLite calls never suspend); with a
+>   networked database they would. Both now hold a lock, and `tests/test_ports_races.py`
+>   proves it with a repository that yields on every call.
+> - **The DM no longer imports `store`**, and Claude Code is lent the tools and a
+>   `call_tool` instead of reaching back into `dm` for them — covered by a fake-SDK test,
+>   since nothing exercised that bridge before.
+> - **Finding E (the leaking lock and subscriber dicts) is fixed** as a side effect: the
+>   adapter knows when nobody holds or waits on a lock, and drops it.
+> - **`/stream` had no test at all.** It now has one, against a real uvicorn.
 
 **The most valuable structural change in this document, and it ships with zero new
 dependencies.** Phases 5, 8 and 9 all need it; none of them can be done cleanly without it.
@@ -1007,5 +1042,6 @@ Every phase lands with all four, or it is not finished:
 2. **Both languages.** Any user-visible string in `en` and `th`, both blocks, same commit.
 3. **Both modes.** Phases 2 onward must pass the suite under `DND_MODE=lite` and
    `DND_MODE=prod`.
-4. **Documentation.** `ARCHITECTURE.md` updated if an invariant moved; `README.md` and
-   `README.th.md` updated if a player-visible feature changed.
+4. **Documentation.** `ARCHITECTURE.md` updated if an invariant moved;
+   `docs/reference.md` and `docs/reference.th.md` updated if a player-visible feature
+   changed, and the short READMEs only if how you start playing did.

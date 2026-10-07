@@ -1661,6 +1661,21 @@ function card(titleKey, iconName) {
   return box;
 }
 
+/* The working behind an AC, in the player's language: "chain mail 16 · DEX +0 · shield +2".
+   Item names arrive as the sheet spells them, so a Thai campaign's read in Thai. */
+function acWorking(c) {
+  const signed = (v) => (v >= 0 ? "+" : "\u2212") + Math.abs(v);
+  return (c.ac_parts || []).map((p) => {
+    switch (p.k) {
+      case "armor": return `${p.item} ${p.v}`;
+      case "base":  return `${p.item || t("ac_unarmoured")} ${p.v}`;
+      case "dex":   return `${tStat("DEX")} ${signed(p.v)}` + (p.capped ? ` ${t("ac_capped")}` : "");
+      case "floor": return t("ac_floor", p.item, p.v);
+      default:      return `${p.item} ${signed(p.v)}`;
+    }
+  }).join(" \u00b7 ");
+}
+
 function cardVitals(c) {
   const box = card();
   const head = el("div", "who-row");
@@ -1698,6 +1713,14 @@ function cardVitals(c) {
       vitals.append(cell);
     });
   box.append(vitals);
+
+  // AC is worked out from what they wear, so say how - on a phone there is no hover
+  const working = acWorking(c);
+  if (working) {
+    const line = el("div", "ac-from");
+    line.append(icon("ac"), el("span", "", working));
+    box.append(line);
+  }
 
   return box;
 }

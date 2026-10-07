@@ -6,7 +6,7 @@ The model narrates and judges. Every die and every point of damage goes through
 
 import os
 
-from . import i18n, lore, providers, rules, store
+from . import i18n, lore, providers, rules
 
 MAX_TOOL_ROUNDS = 12
 
@@ -42,6 +42,11 @@ HOW YOU RUN THE RULES
   Perception, Survival (WIS); Deception, Intimidation, Performance, Persuasion (CHA).
 - A plain ability check with no skill is fine when none fits - say which ability it is.
 - Attacks: 1d20 + the relevant modifier + proficiency_bonus. Roll damage separately.
+- Armour class is in `party_state`: each character's `ac`, with the working in `ac_from`. A blow
+  lands on a total equal to or above it. Never add up or adjust AC yourself. When someone puts on
+  or takes off armour or a shield, call equip_armor. For a spell or circumstance that changes
+  defence - Shield of Faith, Mage Armor, half cover - call set_effect, and end it when it ends.
+  Armour must be carried before it can be worn: add it with update_character first.
 - Call update_character for every HP, XP, gold, item, or condition change, naming the character
   it applies to. The tool result is the truth; if it contradicts what you just narrated, correct
   yourself in the next line.
@@ -134,6 +139,67 @@ TOOLS = [
     },
 ]
 
+# Armour and defensive effects. Always offered: AC matters in every campaign and is now
+# derived from these, so a DM without them could describe armour but never put it on.
+EQUIP_TOOL = {
+    "name": "equip_armor",
+    "description": (
+        "Put on or take off armour or a shield the character is carrying. AC is then "
+        "recalculated from what they wear and returned with its working - quote that "
+        "number, never your own. Only armour and shields affect AC; weapons need no call."
+    ),
+    "strict": True,
+    "input_schema": {
+        "type": "object",
+        "properties": {
+            "character_name": {"type": "string",
+                               "description": "Exact name of the character."},
+            "item": {"type": "string",
+                     "description": "The armour or shield as it appears in their inventory."},
+            "wear": {"type": "boolean",
+                     "description": "True to put it on, false to take it off."},
+            "reason": {"type": "string",
+                       "description": "Short reason, e.g. 'dons the guard's chain shirt'."},
+        },
+        "required": ["character_name", "item", "wear", "reason"],
+        "additionalProperties": False,
+    },
+}
+
+EFFECT_TOOL = {
+    "name": "set_effect",
+    "description": (
+        "Add, replace or end a named effect that changes a character's AC: a spell "
+        "(Shield of Faith +2, Mage Armor base 13, Barkskin minimum 16), cover (+2 or +5), "
+        "a blessing or a curse. Not for damage or conditions - that is update_character. "
+        "Durations count table turns: each player action is one."
+    ),
+    "strict": True,
+    "input_schema": {
+        "type": "object",
+        "properties": {
+            "character_name": {"type": "string"},
+            "name": {"type": "string",
+                     "description": "e.g. 'Shield of Faith'. Reusing a name replaces it."},
+            "ac_bonus": {"type": "integer", "description": "Added to AC. 0 if none."},
+            "ac_base": {"type": "integer",
+                        "description": "Replaces the unarmoured base (Mage Armor: 13). "
+                                       "Ignored while armour is worn. 0 if none."},
+            "ac_min": {"type": "integer",
+                       "description": "AC can't go below this (Barkskin: 16). 0 if none."},
+            "turns": {"type": "integer",
+                      "description": "Table turns it lasts. 0 means until you end it."},
+            "remove": {"type": "boolean",
+                       "description": "True to end the named effect; the numbers are then ignored."},
+        },
+        "required": ["character_name", "name", "ac_bonus", "ac_base", "ac_min",
+                     "turns", "remove"],
+        "additionalProperties": False,
+    },
+}
+
+TOOLS.extend([EQUIP_TOOL, EFFECT_TOOL])
+
 # Only offered to the DM when the campaign has documents to search - a tool with nothing
 # behind it is worse than no tool, because the model will still reach for it.
 LORE_TOOL = {
@@ -192,11 +258,13 @@ IMAGE_TOOL = {
 }
 
 
-def tools_for(cid):
-    """The tool list for this campaign: the base two, plus lore when there is any,
+async def tools_for(cid, repo=None):
+    """The tool list for this campaign: the base set, plus lore when there is any,
     plus drawing when some backend can draw."""
     tools = list(TOOLS)
-    if cid and store.lore_documents(cid):
+    if cid and repo is None:
+        raise ValueError("tools_for for a campaign needs its repository - pass repo=, from the adapters")
+    if cid and await repo.lore_documents(cid):
         tools.append(LORE_TOOL)
     # no campaign means no feed and nowhere to file the picture - that is the terminal
     # client, which is text and stays text
@@ -217,7 +285,7 @@ def _find(characters, name):
     return None
 
 
-def _draw_scene(args, cid):
+async def _draw_scene(args, cid, repo):
     """Ask for an illustration. Nothing is drawn here - drawing takes half a minute and
     this runs in the middle of a turn, so all that happens is the rate limit is checked
     and a request is emitted. Whoever is driving the turn does the slow part out of band.
@@ -234,7 +302,7 @@ def _draw_scene(args, cid):
     if not prompt:
         return "ERROR: say what to draw.", None
 
-    if not store.claim_art_slot(cid, ART_EVERY_TURNS):
+    if not await repo.claim_art_slot(cid, ART_EVERY_TURNS):
         return (f"NOT NOW: the table was illustrated recently. Another picture is "
                 f"available after {ART_EVERY_TURNS} more player turns. Keep narrating "
                 f"and do not mention this."), None
@@ -245,17 +313,79 @@ def _draw_scene(args, cid):
              "caption": (args.get("caption") or "").strip()[:200]})
 
 
-def run_tool(name, args, characters, lang="en", cid=None):
-    """Execute a DM tool call. Returns (tool_result_text, event_or_None)."""
+def _defence(name, args, characters, lang):
+    """equip_armor and set_effect: change what protects a character, then recompute.
+
+    Both end the same way - AC worked out again in Python, old and new in the result,
+    the breakdown beside them - because the model must quote that number rather than
+    reach for one of its own.
+    """
+    ch = _find(characters, args.get("character_name"))
+    if ch is None:
+        known = ", ".join(c["name"] for c in characters)
+        return f"ERROR: no character named {args.get('character_name')!r}. Party: {known}", None
+
+    rules.ensure_equipment(ch)
+    before = ch.get("ac")
+    if before is None:
+        before = rules.recompute_ac(ch)[1]
+    changes = []
+
+    if name == "equip_armor":
+        wearing = bool(args.get("wear", True))
+        ok, message, entry = rules.wear(ch, args.get("item"), on=wearing)
+        if not ok:
+            return f"ERROR: {message}", None
+        changes.append({"t": "wear" if wearing else "unwear", "item": entry})
+    else:
+        effect = (args.get("name") or "").strip()
+        if args.get("remove"):
+            if not rules.clear_effect(ch, effect):
+                active = ", ".join(fx["name"] for fx in ch["effects"]) or "none"
+                return (f"ERROR: {ch['name']} has no effect named {effect!r}. "
+                        f"Active: {active}"), None
+            message = f"{effect} ends on {ch['name']}."
+            changes.append({"t": "fx-", "name": effect})
+        else:
+            try:
+                fx = rules.set_effect(ch, effect, args.get("ac_bonus"), args.get("ac_base"),
+                                      args.get("ac_min"), args.get("turns"))
+            except ValueError as e:
+                return f"ERROR: {e}", None
+            message = f"{fx['name']} on {ch['name']}" + (
+                f" for {fx['turns']} turns." if fx["turns"] else " until it is ended.")
+            changes.append({"t": "fx+", "name": fx["name"], "turns": fx["turns"]})
+
+    _, after = rules.recompute_ac(ch)
+    if after != before:
+        changes.append({"t": "ac", "from": before, "to": after})
+        summary = f"{message} AC {before} -> {after}"
+    else:
+        summary = f"{message} AC stays {after}"
+    result = (f"{summary} ({rules.ac_summary(ch)})\n"
+              f"Party state: {rules.state_block(characters, lang)}")
+    return result, {"kind": "sheet", "character": ch["name"], "summary": summary,
+                    "changes": changes}
+
+
+async def run_tool(name, args, characters, lang="en", cid=None, repo=None):
+    """Execute a DM tool call. Returns (tool_result_text, event_or_None).
+
+    `repo` is needed only by the tools that read campaign storage - the library and
+    the illustration slot. The rules tools are pure, and the terminal client, which
+    has no campaign, never passes one.
+    """
+    if cid and repo is None and name in ("search_lore", "draw_scene"):
+        raise ValueError("run_tool for a campaign needs its repository - pass repo=, from the adapters")
     if name == "search_lore":
         if not cid:
             return "ERROR: this campaign has no documents to search.", None
-        found = lore.search(store.lore_texts(cid), args.get("query"),
+        found = lore.search(await repo.lore_texts(cid), args.get("query"),
                             args.get("document") or None)
         return found, {"kind": "lore", "query": (args.get("query") or "")[:80]}
 
     if name == "draw_scene":
-        return _draw_scene(args, cid)
+        return await _draw_scene(args, cid, repo)
 
     if name == "roll_dice":
         try:
@@ -267,6 +397,9 @@ def run_tool(name, args, characters, lang="en", cid=None):
         return (f"{detail}  (total: {total})",
                 {"kind": "dice", "reason": reason, "detail": detail,
                  "total": total, "crit": crit})
+
+    if name in ("equip_armor", "set_effect"):
+        return _defence(name, args, characters, lang)
 
     if name != "update_character":
         return f"ERROR: unknown tool {name}", None
@@ -331,6 +464,16 @@ def run_tool(name, args, characters, lang="en", cid=None):
         log.append(f"LEVEL {ch['level']}! max HP +{gain} -> {ch['max_hp']}, fully healed")
         changes.append({"t": "level", "level": ch["level"], "gain": gain, "max": ch["max_hp"]})
 
+    # armour sold, stolen or smashed leaves the inventory above - and its AC goes with it
+    ac_before = ch.get("ac")
+    for gone in rules.reconcile_equipment(ch):
+        log.append(f"no longer wearing {gone}")
+        changes.append({"t": "unwear", "item": gone})
+    _, ac_after = rules.recompute_ac(ch)
+    if ac_before is not None and ac_after != ac_before:
+        log.append(f"AC {ac_before} -> {ac_after}")
+        changes.append({"t": "ac", "from": ac_before, "to": ac_after})
+
     summary = "; ".join(log) or "no change"
     result = f"{summary}\nParty state: {rules.state_block(characters, lang)}"
     return result, {"kind": "sheet", "character": ch["name"], "summary": summary,
@@ -357,7 +500,7 @@ def build_prompt(characters, actor, action, lang="en"):
             f"{notes}{who} {action}")
 
 
-def system_blocks(lang, cid=None):
+async def system_blocks(lang, cid=None, repo=None):
     """Base prompt stays cached; the language instruction rides after it as its own
     block, so switching language doesn't invalidate the cached prefix.
 
@@ -369,19 +512,29 @@ def system_blocks(lang, cid=None):
     if extra.strip():
         blocks.append({"type": "text", "text": extra})
     if cid:
-        listing = lore.manifest(store.lore_documents(cid))
+        if repo is None:
+            raise ValueError("system_blocks for a campaign needs its repository - pass repo=, from the adapters")
+        listing = lore.manifest(await repo.lore_documents(cid))
         if listing:
             blocks.append({"type": "text", "text": listing})
     return blocks
 
 
-async def _run(backend, history, characters, lang, images=None, cid=None):
+async def _run(backend, history, characters, lang, images=None, cid=None, repo=None):
     """Drive one backend through a turn's tool rounds. Raises to trigger failover."""
+    system = await system_blocks(lang, cid, repo)
+    tools = await tools_for(cid, repo)
+
+    async def call_tool(name, args):
+        return await run_tool(name, args, characters, lang, cid, repo)
+
     # a backend that owns its own tool loop (Claude Code, running on a subscription)
-    # runs the whole turn itself and yields the same events this loop would
+    # runs the whole turn itself and yields the same events this loop would. It is
+    # handed the tools and a way to call them, rather than reaching back into this
+    # module for them.
     if hasattr(backend, "run_turn"):
-        async for event in backend.run_turn(system_blocks(lang, cid), history, characters,
-                                            lang, images, cid):
+        async for event in backend.run_turn(system, history, characters, lang, images,
+                                            cid, tools=tools, call_tool=call_tool):
             yield event
         return
 
@@ -390,8 +543,7 @@ async def _run(backend, history, characters, lang, images=None, cid=None):
         # images ride the first request only; after that the model has already seen them
         # and re-sending would pay for them again on every tool round
         turn_images = images if round_no == 0 else None
-        async for chunk in backend.stream(system_blocks(lang, cid), history,
-                                          tools_for(cid), turn_images):
+        async for chunk in backend.stream(system, history, tools, turn_images):
             if chunk["type"] == "delta":
                 yield {"kind": "delta", "text": chunk["text"]}
             else:
@@ -418,8 +570,8 @@ async def _run(backend, history, characters, lang, images=None, cid=None):
         results = []
         for block in message["content"]:
             if block.get("type") == "tool_use":
-                out, event = run_tool(block["name"], dict(block.get("input") or {}),
-                                      characters, lang, cid)
+                out, event = await call_tool(block["name"],
+                                             dict(block.get("input") or {}))
                 if event:
                     yield event
                 results.append({"type": "tool_result", "tool_use_id": block["id"],
@@ -430,7 +582,7 @@ async def _run(backend, history, characters, lang, images=None, cid=None):
 
 
 async def take_turn(history, characters, actor, action, lang="en", backend_id=None,
-                    images=None, cid=None):
+                    images=None, cid=None, repo=None):
     """Run one DM turn. Async generator of events; mutates history and characters.
 
     Yields {"kind": "delta"|"narration"|"dice"|"sheet"|"draw"|"switch"|"error", ...}.
@@ -462,7 +614,8 @@ async def take_turn(history, characters, actor, action, lang="en", backend_id=No
         try:
             # a backend that can't see images still gets the caption in the prompt
             usable = images if getattr(backend, "vision", False) else None
-            async for event in _run(backend, history, characters, lang, usable, cid):
+            async for event in _run(backend, history, characters, lang, usable, cid,
+                                    repo):
                 yield event
             if i:
                 yield {"kind": "backend", "backend": backend.id}   # persist the switch

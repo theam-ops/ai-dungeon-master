@@ -599,7 +599,7 @@ Remove a document any time from the same panel.
 
 ## How it works
 
-The DM has two tools that run on every campaign, and both execute locally:
+The DM has four tools that run on every campaign, and all of them execute locally:
 
 - **`roll_dice`** — the model never states a result it didn't roll. It sets the DC out
   loud first, then the number comes from Python's RNG, so it can't quietly decide you
@@ -611,6 +611,11 @@ The DM has two tools that run on every campaign, and both execute locally:
 - **`update_character`** — all damage, healing, XP, gold, items and conditions go through
   the sheet in code, named to a specific character. The result is fed back to the model,
   so it can't drift from your real HP. Level-ups roll a fresh hit die.
+- **`equip_armor` and `set_effect`** — armour class is worked out, not remembered: from
+  the armour and shield a character wears, their DEX, and named effects like *Shield of
+  Faith* or *Mage Armor*, which run out by themselves. The dashboard shows the working
+  under the number — `chain mail 16 · DEX +0 · shield +2` — and the DM is handed the
+  same line, so it quotes AC rather than adding it up. Sell the chain mail and AC drops.
 
 Two more appear only when there is something behind them — a tool with nothing behind
 it is worse than no tool, because the model reaches for it anyway:

@@ -205,6 +205,15 @@ const STRINGS = {
     ch_cond_add: "{0}",
     ch_cond_rm: "cured: {0}",
     ch_level: "Level {0}! max HP {1}",
+    ch_ac: "AC {0} → {1}",
+    ch_wear: "puts on {0}",
+    ch_unwear: "takes off {0}",
+    ch_fx_add: "{0}",
+    ch_fx_add_for: "{0} ({1} turns)",
+    ch_fx_rm: "{0} wore off",
+    ac_unarmoured: "unarmoured",
+    ac_capped: "(armour caps it)",
+    ac_floor: "{0} raises it +{1}",
 
     races: {}, classes: {}, stats: {}, skills: {},
   },
@@ -409,6 +418,15 @@ const STRINGS = {
     ch_cond_add: "{0}",
     ch_cond_rm: "หายจาก: {0}",
     ch_level: "เลเวล {0}! พลังชีวิตสูงสุด {1}",
+    ch_ac: "เกราะ {0} → {1}",
+    ch_wear: "สวม {0}",
+    ch_unwear: "ถอด {0}",
+    ch_fx_add: "{0}",
+    ch_fx_add_for: "{0} ({1} เทิร์น)",
+    ch_fx_rm: "{0} หมดฤทธิ์",
+    ac_unarmoured: "ไม่สวมเกราะ",
+    ac_capped: "(เกราะจำกัดไว้)",
+    ac_floor: "{0} เพิ่มให้ +{1}",
 
     races: {
       Human: "มนุษย์", Elf: "เอลฟ์", Dwarf: "คนแคระ", Halfling: "ฮาล์ฟลิง",
@@ -485,6 +503,11 @@ function renderChange(c) {
     case "cond+":  return t("ch_cond_add", c.cond);
     case "cond-":  return t("ch_cond_rm", c.cond);
     case "level":  return t("ch_level", c.level, c.max);
+    case "ac":     return t("ch_ac", c.from, c.to);
+    case "wear":   return t("ch_wear", c.item);
+    case "unwear": return t("ch_unwear", c.item);
+    case "fx+":    return c.turns ? t("ch_fx_add_for", c.name, c.turns) : t("ch_fx_add", c.name);
+    case "fx-":    return t("ch_fx_rm", c.name);
     default:       return "";
   }
 }

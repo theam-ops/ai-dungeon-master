@@ -47,7 +47,12 @@ def load(name):
         else:
             die(f"no character called {name!r} - try `python play.py list`")
     with open(path, encoding="utf-8") as f:
-        return json.load(f), path
+        data = json.load(f)
+    # saves from before AC was derived carry the old frozen number
+    if isinstance(data.get("character"), dict):
+        rules.ensure_equipment(data["character"])
+        rules.recompute_ac(data["character"])
+    return data, path
 
 
 def store(data, path):
@@ -153,6 +158,26 @@ def cmd_update(a):
         gain = rules.level_up(ch)
         log.append(f"LEVEL {ch['level']}! max HP +{gain} -> {ch['max_hp']}, fully healed")
 
+    ac_before = ch["ac"]
+    for gone in rules.reconcile_equipment(ch):
+        log.append(f"no longer wearing {gone}")
+    for item in a.wear or []:
+        log.append(rules.wear(ch, item, on=True)[1])
+    for item in a.unwear or []:
+        log.append(rules.wear(ch, item, on=False)[1])
+    if a.effect:
+        try:
+            rules.set_effect(ch, a.effect, a.ac_bonus, a.ac_base, a.ac_min, a.turns)
+            log.append(f"effect: {a.effect}")
+        except ValueError as e:
+            log.append(f"(effect not set: {e})")
+    for name in a.end_effect or []:
+        if rules.clear_effect(ch, name):
+            log.append(f"ended: {name}")
+    rules.recompute_ac(ch)
+    if ch["ac"] != ac_before:
+        log.append(f"AC {ac_before} -> {ch['ac']} ({rules.ac_summary(ch)})")
+
     store(data, path)
     print("; ".join(log) or "no change")
     print()
@@ -217,6 +242,16 @@ def main():
     u.add_argument("--condition", action="append", metavar="COND")
     u.add_argument("--cure", action="append", metavar="COND")
     u.add_argument("--level-up", action="store_true")
+    u.add_argument("--wear", action="append", metavar="ITEM",
+                   help="put on carried armour or a shield")
+    u.add_argument("--unwear", action="append", metavar="ITEM")
+    u.add_argument("--effect", metavar="NAME", help="add an effect that changes AC")
+    u.add_argument("--ac-bonus", type=int, default=0, help="with --effect: +N to AC")
+    u.add_argument("--ac-base", type=int, default=0,
+                   help="with --effect: unarmoured base, e.g. 13 for mage armor")
+    u.add_argument("--ac-min", type=int, default=0, help="with --effect: AC floor")
+    u.add_argument("--turns", type=int, default=0, help="with --effect: 0 = until ended")
+    u.add_argument("--end-effect", action="append", metavar="NAME")
     u.set_defaults(fn=cmd_update)
 
     nt = sub.add_parser("note", help="record something that happened")

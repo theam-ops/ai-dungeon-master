@@ -137,13 +137,11 @@ def temp_db(tmp_path, monkeypatch):
     The locks matter: an `asyncio.Lock` binds to the loop that first waits on it, and
     each test runs its own `asyncio.run`.
     """
+    store.close_all()
     monkeypatch.setattr(store, "DB_PATH", str(tmp_path / "campaign.db"))
-    monkeypatch.setattr(store, "_conn", None)
-    server.locks.clear()
-    server.subscribers.clear()
+    monkeypatch.setattr(server, "A", server.fresh_adapters("lite"))
     yield
-    if store._conn is not None:
-        store._conn.close()
+    store.close_all()
 
 
 async def drain(agen):
@@ -211,7 +209,7 @@ def app_client(monkeypatch):
 
 def _reset_db(store):
     """Drop every row. Cheaper and more reliable than a new file per test - the module
-    holds one connection and reopening it would need `store._conn` surgery anyway."""
+    keeps a connection per thread, and those would all need closing and reopening."""
     conn = store.db()
     for table in ("events", "media", "lore", "characters", "campaigns"):
         conn.execute(f"DELETE FROM {table}")

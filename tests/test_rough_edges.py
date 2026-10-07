@@ -439,14 +439,16 @@ def test_known_the_rate_limit_is_per_table_not_per_player(app_client, monkeypatc
     stub.script.clear()
 
 
-def test_known_locks_and_subscribers_are_never_cleaned_up(app_client):
-    """Two module-level defaultdicts gain an entry per campaign id and lose none, even
-    when the campaign is deleted. Small, but it is a leak in a long-lived process."""
+def test_locks_and_subscriptions_are_let_go(app_client):
+    """FIXED: two module-level defaultdicts gained an entry per campaign id and lost
+    none, deleted campaigns included - a slow leak in a server meant to stay up for
+    months. The lite adapters make a lock when a turn needs one and drop it once nobody
+    holds or waits for it, and drop a campaign's subscriber set with its last watcher."""
     import server
     client, stub = app_client
-    before = len(server.locks)
     table = new_table(client, stub)
     table.begin("Hello.")
-    assert len(server.locks) == before + 1
+    assert server.A.locks.held() == set()          # the turn is over; nothing kept
     client.delete(f"/api/campaigns/{table.id}").raise_for_status()
-    assert len(server.locks) == before + 1        # still there
+    assert server.A.locks.held() == set()
+    assert server.A.bus.channels() == {}

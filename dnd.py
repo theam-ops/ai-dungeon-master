@@ -80,6 +80,9 @@ def list_saves():
 def load_save(filename):
     with open(os.path.join(SAVE_DIR, filename), encoding="utf-8") as f:
         data = json.load(f)
+    # saves from before AC was derived carry the old frozen number
+    rules.ensure_equipment(data["character"])
+    rules.recompute_ac(data["character"])
     return (data["character"], data.get("history", []), data.get("log", []),
             data.get("lang", "en"))
 

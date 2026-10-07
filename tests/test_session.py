@@ -24,7 +24,10 @@ def test_a_whole_campaign(app_client):
     # the DM was handed the party state and its tools
     first = stub.calls[0]
     assert any("Dungeon Master" in b["text"] for b in first["system"])
-    assert {t["name"] for t in first["tools"]} == {"roll_dice", "update_character"}
+    # the always-on set: no lore without documents, no drawing without an artist - but
+    # armour is always there, since AC is derived from it in every campaign
+    assert {t["name"] for t in first["tools"]} == {
+        "roll_dice", "update_character", "equip_armor", "set_effect"}
     assert "Vess" in first["messages"][0]["content"]
 
     # -- a turn with a roll and damage -------------------------------------- #

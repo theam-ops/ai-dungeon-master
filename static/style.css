@@ -670,6 +670,12 @@ button:disabled { opacity: .45; cursor: default; }
 }
 .vital .k { font-family: var(--display); font-size: 10px; letter-spacing: .1em; color: var(--muted); }
 .vital .v { font-size: 17px; font-weight: 600; font-family: var(--mono); }
+.ac-from {
+  display: flex; align-items: flex-start; gap: 6px;
+  margin: -6px 0 2px; font-size: 12px; line-height: 1.45; color: var(--muted);
+  overflow-wrap: anywhere;
+}
+.ac-from .ic { margin-top: 2px; color: var(--gold-dim); }
 .sheet-list { font-size: 15px; color: #cfc3b0; margin: 0 0 12px; }
 .sheet-list b {
   display: block; font-family: var(--display); font-size: 11px; letter-spacing: .12em;

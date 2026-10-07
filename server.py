@@ -15,6 +15,8 @@ Environment:
     ALLOW_KEY_SETUP     optional - set 0 to forbid pasting keys into the running app
     DND_KEYS            optional - where pasted keys are stored (default .keys.json)
     DND_DB              optional - path to the SQLite file
+    DND_MODE            optional - `lite` (default): one process, nothing to install.
+                        `prod` is planned, not built - see docs/REFACTORING_PLAN.md
     MAX_TURNS_PER_MIN   optional - per-campaign spend backstop (default 12)
     DM_ART_EVERY_TURNS  optional - player turns between DM illustrations (default 6)
 
@@ -30,7 +32,7 @@ import re
 import secrets
 import sys
 import zipfile
-from collections import defaultdict
+from contextlib import asynccontextmanager
 from urllib.parse import quote
 
 from fastapi import Body, FastAPI, File, Form, HTTPException, Request, UploadFile
@@ -39,7 +41,12 @@ from fastapi.responses import (FileResponse, JSONResponse, Response,
 from fastapi.staticfiles import StaticFiles
 from starlette.middleware.sessions import SessionMiddleware
 
-from game import claude_code, dm, i18n, lore, media, providers, rules, store
+from game import claude_code, i18n, lore, media, providers, rules
+from game.adapters import build_adapters
+from game.services import events
+from game.services.events import public_character
+from game.services.turn import run_dm_turn, turn_key
+from game.services.turn import player_safe  # noqa: F401 - re-exported; tests use it here
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 STATIC = os.path.join(HERE, "static")
@@ -73,7 +80,16 @@ def _session_secret():
     return value
 
 
-app = FastAPI(title="AI Dungeon Master")
+@asynccontextmanager
+async def lifespan(_app):
+    await A.start()
+    try:
+        yield
+    finally:
+        await A.aclose()
+
+
+app = FastAPI(title="AI Dungeon Master", lifespan=lifespan)
 app.add_middleware(SessionMiddleware, secret_key=_session_secret(),
                    session_cookie="dnd_session", max_age=60 * 60 * 24 * 365,
                    same_site="lax", https_only=False)
@@ -95,25 +111,13 @@ async def revalidate_shell(request, call_next):
     return response
 
 
-# in-memory fanout: campaign_id -> set of subscriber queues
-subscribers = defaultdict(set)
-# one DM turn at a time per campaign
-locks = defaultdict(asyncio.Lock)
-# campaigns whose opening scene has been asked for but not yet written. `begin` refuses
-# a second call by looking at the saved history, which is only written when the turn
-# ends - so two players tapping Begin at the same moment both passed the check and the
-# campaign opened twice, in two different places.
-beginning = set()
-# asyncio keeps only a weak reference to a task, so a turn with nothing holding on to it
-# can be collected mid-narration. Hold them until they finish.
-running = set()
-
-
-def spawn(coro):
-    task = asyncio.create_task(coro)
-    running.add(task)
-    task.add_done_callback(running.discard)
-    return task
+# Who is watching, whose turn it is, what is running in the background: all of it lives
+# behind the ports in `game/ports.py`, reached through `A` - built at the bottom of this
+# file, once the jobs it runs are defined. Nothing here is a module-level dict any more,
+# which is what pinned the server to a single process.
+#
+# The turn itself is `game/services/turn.py`. The helpers below keep their old shapes and
+# hand `A` to the services, so the endpoints read the same as before.
 
 
 # --------------------------------------------------------------------------- #
@@ -141,13 +145,13 @@ def require_client():
                                  "or run Ollama, so the DM can think.")
 
 
-def require_member(request, cid):
+async def require_member(request, cid):
     """Caller must have a character in this campaign."""
     token = require_auth(request)
-    campaign = store.get_campaign(cid)
+    campaign = await A.repo.get_campaign(cid)
     if not campaign:
         raise HTTPException(404, "no such campaign")
-    me = store.character_for_token(cid, token)
+    me = await A.repo.character_for_token(cid, token)
     if not me:
         raise HTTPException(403, "you have no character in this campaign")
     return token, campaign, me
@@ -158,18 +162,13 @@ def require_member(request, cid):
 # --------------------------------------------------------------------------- #
 
 async def broadcast(cid, event):
-    for q in list(subscribers[cid]):
-        try:
-            q.put_nowait(event)
-        except asyncio.QueueFull:
-            pass  # a stalled client drops frames rather than blocking the table
+    """Push to everyone watching, without recording it. See `services.events`."""
+    await events.broadcast(A, cid, event)
 
 
 async def publish(cid, kind, payload):
-    """Persist an event and push it to everyone watching."""
-    event = store.append_event(cid, kind, payload)
-    await broadcast(cid, event)
-    return event
+    """Record an event, then push it to everyone watching. See `services.events`."""
+    return await events.publish(A, cid, kind, payload)
 
 
 # --------------------------------------------------------------------------- #
@@ -184,7 +183,7 @@ async def me(request: Request):
         "authed": authed,
         "needs_password": bool(APP_PASSWORD),
         "dm_ready": providers.any_available(),
-        "campaigns": store.campaigns_for_token(token) if authed else [],
+        "campaigns": await A.repo.campaigns_for_token(token) if authed else [],
     }
 
 
@@ -363,14 +362,14 @@ async def claude_login_cancel(request: Request):
 @app.post("/api/campaigns/{cid}/provider")
 async def set_provider(request: Request, cid: str, backend: str = Body(..., embed=True)):
     """Switch this campaign to another AI. Takes effect on the next turn."""
-    require_member(request, cid)
+    await require_member(request, cid)
     target = providers.get(backend)
     if not target:
         raise HTTPException(400, "no such AI")
     if not target.available():
         raise HTTPException(400, f"{target.label} has no API key configured on the server")
 
-    store.set_campaign_backend(cid, target.id)
+    await A.repo.set_campaign_backend(cid, target.id)
     await publish(cid, "switch", {"backend": target.id, "label": target.label,
                                   "manual": True})
     return {"ok": True, "backend": target.id, "label": target.label}
@@ -390,15 +389,6 @@ async def private_roll(request: Request, notation: str = Body("1d20", embed=True
 # --------------------------------------------------------------------------- #
 # campaigns
 # --------------------------------------------------------------------------- #
-
-def public_character(c):
-    """One character as the whole table may see it.
-
-    A player's standing notes are theirs: they steer the DM on that player's own turns
-    and nobody else needs them to draw an HP bar, so they never ride a payload that goes
-    to every browser at the table.
-    """
-    return {k: v for k, v in c.items() if not k.startswith("_") and k != "notes"}
 
 
 def _make_character(spec, lang="en"):
@@ -420,8 +410,8 @@ async def create_campaign(request: Request, body: dict = Body(...)):
     char = _make_character(body.get("character") or {}, lang)
 
     backend = body.get("backend") if providers.get(body.get("backend")) else providers.default_id()
-    campaign = store.create_campaign(name, lang, backend)
-    store.add_character(campaign["id"], char, token)
+    campaign = await A.repo.create_campaign(name, lang, backend)
+    await A.repo.add_character(campaign["id"], char, token)
     await publish(campaign["id"], "join", {"character": char["name"]})
     return campaign
 
@@ -430,17 +420,17 @@ async def create_campaign(request: Request, body: dict = Body(...)):
 async def join_lookup(request: Request, code: str = Body(..., embed=True)):
     """Look up a campaign by code so the player can create or claim a character."""
     require_auth(request)
-    campaign = store.campaign_by_code(code)
+    campaign = await A.repo.campaign_by_code(code)
     if not campaign:
         raise HTTPException(404, "no campaign with that code")
     token = player_token(request)
-    mine = store.character_for_token(campaign["id"], token)
+    mine = await A.repo.character_for_token(campaign["id"], token)
     return {
         "id": campaign["id"], "code": campaign["code"], "name": campaign["name"],
         "lang": campaign["lang"] or "en", "already_in": bool(mine),
         "party": [{"id": c["_id"], "name": c["name"], "race": c["race"],
                    "class": c["class"], "level": c["level"], "claimed": bool(c["_token"])}
-                  for c in store.party(campaign["id"])],
+                  for c in await A.repo.party(campaign["id"])],
     }
 
 
@@ -448,32 +438,41 @@ async def join_lookup(request: Request, code: str = Body(..., embed=True)):
 async def add_or_claim(request: Request, cid: str, body: dict = Body(...)):
     """Create a new character in this campaign, or claim an existing one for this device."""
     token = require_auth(request)
-    if not store.get_campaign(cid):
+    if not await A.repo.get_campaign(cid):
         raise HTTPException(404, "no such campaign")
 
-    if store.character_for_token(cid, token):
-        raise HTTPException(400, "you already have a character here")
+    # Every check below is read-then-write: is this browser already seated, is the
+    # table full, is the name taken. Two joins at once must not both pass - with a
+    # database whose reads really suspend, both would see the same roster and both
+    # would be added. Held only for the checks and the write: `announce_arrival` waits
+    # on the turn lock, and a joiner must not keep the door shut for a whole DM turn.
+    async with A.locks.hold(f"roster:{cid}"):
+        if await A.repo.character_for_token(cid, token):
+            raise HTTPException(400, "you already have a character here")
 
-    claim_id = body.get("claim_id")
-    if claim_id:
-        target = next((c for c in store.party(cid) if c["_id"] == claim_id), None)
-        if not target:
-            raise HTTPException(404, "no such character")
-        store.claim_character(claim_id, token)
-        return {"ok": True, "character": public_character(target)}
+        claim_id = body.get("claim_id")
+        if claim_id:
+            target = next((c for c in await A.repo.party(cid) if c["_id"] == claim_id),
+                          None)
+            if not target:
+                raise HTTPException(404, "no such character")
+            await A.repo.claim_character(claim_id, token)
+            return {"ok": True, "character": public_character(target)}
 
-    roster = store.party(cid)
-    if len(roster) >= 6:
-        raise HTTPException(400, "this party is full (6 characters)")
+        roster = await A.repo.party(cid)
+        if len(roster) >= 6:
+            raise HTTPException(400, "this party is full (6 characters)")
 
-    char = _make_character(body.get("character") or {}, store.campaign_lang(cid))
-    # The DM addresses a character by name, and `dm.run_tool` finds it by name, so two
-    # people called Vess is not a cosmetic clash: every point of damage the DM aims at
-    # either of them lands on whichever was created first, and the other is invulnerable.
-    if any(c["name"].strip().lower() == char["name"].strip().lower() for c in roster):
-        raise HTTPException(400, f"someone at this table is already called "
-                                 f"{char['name']} - pick another name")
-    store.add_character(cid, char, token)
+        char = _make_character(body.get("character") or {}, await A.repo.campaign_lang(cid))
+        # The DM addresses a character by name, and `dm.run_tool` finds it by name, so two
+        # people called Vess is not a cosmetic clash: every point of damage the DM aims at
+        # either of them lands on whichever was created first, and the other is
+        # invulnerable.
+        if any(c["name"].strip().lower() == char["name"].strip().lower() for c in roster):
+            raise HTTPException(400, f"someone at this table is already called "
+                                     f"{char['name']} - pick another name")
+        await A.repo.add_character(cid, char, token)
+
     await announce_arrival(cid, char["name"])
     await publish(cid, "join", {"character": char["name"]})
     return {"ok": True, "character": char}
@@ -485,10 +484,10 @@ async def announce_arrival(cid, name):
     Under the turn lock: a turn in flight is holding the history list in memory and
     saves it when it finishes, so writing outside the lock would be overwritten.
     """
-    if not store.get_history(cid):
+    if not await A.repo.get_history(cid):
         return          # the story hasn't started; `begin` introduces the whole party
-    async with locks[cid]:
-        store.note_in_history(cid, (
+    async with A.locks.hold(turn_key(cid)):
+        await A.repo.note_in_history(cid, (
             f"<table_note>{name} has just joined the party, mid-story. They are in the "
             "party state from here on. Bring them into the scene in your next narration "
             "- give them a reason to be here and a moment of their own.</table_note>"))
@@ -496,17 +495,17 @@ async def announce_arrival(cid, name):
 
 @app.get("/api/campaigns/{cid}")
 async def campaign_detail(request: Request, cid: str):
-    token, campaign, me = require_member(request, cid)
+    token, campaign, me = await require_member(request, cid)
     return {
         "id": cid, "code": campaign["code"], "name": campaign["name"],
         "lang": campaign["lang"] or "en",
         "backend": campaign["backend"] or providers.default_id(),
         "you": me["name"],
         "notes": me.get("notes", ""),        # your own standing notes, nobody else's
-        "notes_max": store.MAX_NOTES_CHARS,
-        "party": [public_character(c) for c in store.party(cid)],
-        "last_seq": store.last_seq(cid),
-        "started": bool(store.get_history(cid)),
+        "notes_max": rules.MAX_NOTES_CHARS,
+        "party": [public_character(c) for c in await A.repo.party(cid)],
+        "last_seq": await A.repo.last_seq(cid),
+        "started": bool(await A.repo.get_history(cid)),
     }
 
 
@@ -517,12 +516,12 @@ async def set_notes(request: Request, cid: str, body: dict = Body(...)):
     There is no character id in the request on purpose: `require_member` resolves the
     character from this browser's own token, so a player can only ever write their own.
     """
-    token, campaign, me = require_member(request, cid)
-    notes = store.set_character_notes(me["_id"], body.get("notes"))
-    return {"ok": True, "notes": notes, "notes_max": store.MAX_NOTES_CHARS}
+    token, campaign, me = await require_member(request, cid)
+    notes = await A.repo.set_character_notes(me["_id"], body.get("notes"))
+    return {"ok": True, "notes": notes, "notes_max": rules.MAX_NOTES_CHARS}
 
 
-def replay(cid, since):
+async def replay(cid, since):
     """Every event after `since`, oldest first.
 
     Paged, because `events_since` caps one read: somebody joining a long campaign asks
@@ -531,23 +530,24 @@ def replay(cid, since):
     a silent hole in the middle of the story rather than a short one.
     """
     while True:
-        batch = store.events_since(cid, since)
+        batch = await A.repo.events_since(cid, since)
         if not batch:
             return
-        yield from batch
+        for event in batch:
+            yield event
         since = batch[-1]["seq"]
 
 
 @app.get("/api/campaigns/{cid}/events")
 async def campaign_events(request: Request, cid: str, since: int = 0):
-    require_member(request, cid)
-    return {"events": list(replay(cid, since))}
+    await require_member(request, cid)
+    return {"events": [event async for event in replay(cid, since)]}
 
 
 @app.delete("/api/campaigns/{cid}")
 async def remove_campaign(request: Request, cid: str):
-    require_member(request, cid)
-    store.delete_campaign(cid)
+    await require_member(request, cid)
+    await A.repo.delete_campaign(cid)
     media.drop_campaign(cid)
     return {"ok": True}
 
@@ -558,28 +558,24 @@ async def remove_campaign(request: Request, cid: str):
 
 @app.get("/api/campaigns/{cid}/stream")
 async def stream(request: Request, cid: str, since: int = 0):
-    require_member(request, cid)
-
-    queue = asyncio.Queue(maxsize=1000)
-    subscribers[cid].add(queue)
+    await require_member(request, cid)
 
     async def gen():
-        try:
+        # subscribed *before* the replay, so nothing published while it runs is lost -
+        # at worst an event arrives twice, and the browser skips any seq it has seen
+        async with A.bus.subscribe(cid) as sub:
             # replay anything this client missed while it was away - or, for somebody
             # who just joined, the whole story so far
-            for event in replay(cid, since):
+            async for event in replay(cid, since):
                 yield f"data: {json.dumps(event)}\n\n"
             yield f"data: {json.dumps({'kind': 'ready'})}\n\n"
 
             while True:
-                try:
-                    event = await asyncio.wait_for(queue.get(), timeout=20)
-                except asyncio.TimeoutError:
+                event = await sub.next(timeout=20)
+                if event is None:
                     yield ": keepalive\n\n"   # keeps proxies and phones from hanging up
                     continue
                 yield f"data: {json.dumps(event)}\n\n"
-        finally:
-            subscribers[cid].discard(queue)
 
     return StreamingResponse(gen(), media_type="text/event-stream", headers={
         "Cache-Control": "no-cache, no-transform",
@@ -588,15 +584,15 @@ async def stream(request: Request, cid: str, since: int = 0):
     })
 
 
-def party_payload(cid):
-    return {"kind": "party", "party": [public_character(c) for c in store.party(cid)]}
+async def party_payload(cid):
+    return await events.party_payload(A, cid)
 
 
-def load_images(cid, media_ids):
+async def load_images(cid, media_ids):
     """Read attached images off disk for the DM to look at."""
     out = []
     for mid in (media_ids or [])[:4]:          # a hard cap: images are expensive context
-        m = store.get_media(cid, mid)
+        m = await A.repo.get_media(cid, mid)
         if not m:
             continue
         data = media.read(cid, m["file"])
@@ -605,80 +601,9 @@ def load_images(cid, media_ids):
     return out
 
 
-SECRETISH_RE = re.compile(r"[{\[<]|(?:sk|gsk|AIza|sk-or|sk-ant)[-_A-Za-z0-9]{6,}")
-
-
-def player_safe(text):
-    """An upstream failure, trimmed to what a player at the table should be shown.
-
-    A provider's error body is written for whoever holds the key, not for six friends
-    on a tunnel: it arrives as raw JSON naming the model, the account state, sometimes
-    request metadata. `dm.take_turn` folds it verbatim into the `error` and `switch`
-    events, which go to everyone. Keep the readable head - "Claude Opus 5: HTTP 429" -
-    and drop the body. The full text still goes to the server log, where the person
-    who can act on it is looking.
-    """
-    text = " ".join(str(text or "").split())
-    cut = SECRETISH_RE.search(text)
-    if cut:
-        text = text[:cut.start()].rstrip(" :,-")
-        text += ")" * max(0, text.count("(") - text.count(")"))
-    return text[:160] or "the AI did not say why"
-
-
-async def run_dm_turn(cid, actor, action, images=None):
-    """One DM turn, broadcast to the whole table. Serialized per campaign."""
-    async with locks[cid]:
-        characters = store.party(cid)
-        history = store.get_history(cid)
-
-        await broadcast(cid, {"kind": "thinking", "on": True})
-        try:
-            async for event in dm.take_turn(history, characters, actor, action,
-                                            store.campaign_lang(cid),
-                                            store.campaign_backend(cid) or providers.default_id(),
-                                            images, cid):
-                kind = event.pop("kind")
-                if kind == "delta":
-                    await broadcast(cid, {"kind": "delta", **event})
-                    continue
-                if kind == "backend":
-                    store.set_campaign_backend(cid, event["backend"])
-                    continue
-                if kind == "draw":
-                    # The DM asked for an illustration. Generating one takes the better
-                    # part of a minute, and this loop is what feeds the narration to
-                    # every browser at the table - awaiting it here would freeze the
-                    # scene mid-sentence for everyone. It goes off on its own and lands
-                    # in the feed when it is ready, the way a player's upload does.
-                    asyncio.create_task(illustrate(cid, event["prompt"],
-                                                   event.get("caption", "")))
-                    continue
-                if kind in ("error", "switch"):
-                    field = "text" if kind == "error" else "reason"
-                    if event.get(field):
-                        log.warning("campaign %s %s: %s", cid, kind, event[field])
-                        event[field] = player_safe(event[field])
-                await publish(cid, kind, event)
-                if kind == "sheet":
-                    # persist and push straight away so HP bars move as damage lands
-                    store.save_party(characters)
-                    await broadcast(cid, party_payload(cid))
-        except Exception as e:  # never leave the table hanging on an unexpected fault
-            await publish(cid, "error", {"text": f"The DM stumbled: {type(e).__name__}."})
-            raise
-        finally:
-            store.save_party(characters)
-            store.save_history(cid, history)
-            await broadcast(cid, party_payload(cid))
-            await broadcast(cid, {"kind": "backend-now",
-                                  "backend": store.campaign_backend(cid) or providers.default_id()})
-            await broadcast(cid, {"kind": "thinking", "on": False})
-
-
 @app.post("/api/campaigns/{cid}/act")
 async def act(request: Request, cid: str, body: dict = Body(...)):
-    token, campaign, me = require_member(request, cid)
+    token, campaign, me = await require_member(request, cid)
     require_client()
 
     text = (body.get("text") or "").strip()[:2000]
@@ -686,16 +611,16 @@ async def act(request: Request, cid: str, body: dict = Body(...)):
         raise HTTPException(400, "say something")
 
     attached = (body.get("media") or [])[:4]
-    images = load_images(cid, attached)
+    images = await load_images(cid, attached)
 
-    if store.turns_in_last_minute(cid) >= MAX_TURNS_PER_MIN:
+    if await A.repo.turns_in_last_minute(cid) >= MAX_TURNS_PER_MIN:
         raise HTTPException(429, "the table is moving too fast - give the DM a moment")
 
     await publish(cid, "player", {"character": me["name"], "text": text})
 
     # showing the table something means everyone sees it, not just the DM
     for mid in attached:
-        m = store.get_media(cid, mid)
+        m = await A.repo.get_media(cid, mid)
         if m:
             await publish(cid, "image", {
                 "media": m["id"], "character": me["name"], "caption": m["caption"],
@@ -705,23 +630,30 @@ async def act(request: Request, cid: str, body: dict = Body(...)):
     # the DM gets a nudge the players don't see, so a model that can't look at
     # pictures still knows one was produced
     dm_text = text + (f"\n\n[{me['name']} shows the table an image]" if images else "")
-    spawn(run_dm_turn(cid, me["name"], dm_text, images))
+    await A.queue.enqueue("dm_turn", cid=cid, actor=me["name"], action=dm_text,
+                          images=images)
     return {"ok": True}
 
 
 @app.post("/api/campaigns/{cid}/begin")
 async def begin(request: Request, cid: str):
     """Kick off the opening scene."""
-    token, campaign, me = require_member(request, cid)
+    token, campaign, me = await require_member(request, cid)
     require_client()
 
-    # No `await` between the check and the claim, so this is atomic against the other
-    # request that arrived in the same millisecond.
-    if store.get_history(cid) or cid in beginning:
+    # Claim first, then look. Two players tapping Begin in the same millisecond both
+    # saw an empty history - it is only saved when the opening turn ends - and the
+    # campaign opened twice, in two places. Only one of them can hold the claim, and
+    # the turn gives it back when the opening is written. The ttl only matters if a
+    # process dies mid-opening; no DM takes ten minutes to set a scene.
+    claim = f"begin:{cid}"
+    if not await A.locks.claim(claim, ttl=600):
         raise HTTPException(400, "this campaign has already begun")
-    beginning.add(cid)
+    if await A.repo.get_history(cid):
+        await A.locks.release(claim)
+        raise HTTPException(400, "this campaign has already begun")
 
-    party = store.party(cid)
+    party = await A.repo.party(cid)
     roster = ", ".join(f"{c['name']} the level {c['level']} {c['race']} {c['class']}"
                        for c in party)
     prompt = (
@@ -732,8 +664,7 @@ async def begin(request: Request, cid: str):
         + ("Give each character a moment in the opening. " if len(party) > 1 else "")
         + "Then hand control to the players."
     )
-    spawn(run_dm_turn(cid, None, prompt)).add_done_callback(
-        lambda _t, cid=cid: beginning.discard(cid))
+    await A.queue.enqueue("dm_turn", cid=cid, actor=None, action=prompt, claim=claim)
     return {"ok": True}
 
 
@@ -748,15 +679,17 @@ VALID_KINDS = ("portrait", "npc", "scene", "map", "handout")
 GALLERY_KINDS = ("npc", "scene", "map", "handout")
 
 
-def _store_image(cid, token, data_tuple, kind, caption, source):
+async def _store_image(cid, token, data_tuple, kind, caption, source):
     clean, ext, mime, w, h = data_tuple
-    if store.media_count(cid) >= media.MAX_PER_CAMPAIGN:
-        raise HTTPException(400, f"this campaign already has "
-                                 f"{media.MAX_PER_CAMPAIGN} images")
-    name = media.put(cid, clean, ext)
-    mid = store.add_media(cid, name, kind, mime, len(clean), w, h,
-                          caption[:200], source, token)
-    return store.get_media(cid, mid)
+    # count, then add: two uploads at the cap must not both get in
+    async with A.locks.hold(f"media:{cid}"):
+        if await A.repo.media_count(cid) >= media.MAX_PER_CAMPAIGN:
+            raise HTTPException(400, f"this campaign already has "
+                                     f"{media.MAX_PER_CAMPAIGN} images")
+        name = media.put(cid, clean, ext)
+        mid = await A.repo.add_media(cid, name, kind, mime, len(clean), w, h,
+                                     caption[:200], source, token)
+    return await A.repo.get_media(cid, mid)
 
 
 def _describe(m):
@@ -772,17 +705,17 @@ async def upload_media(request: Request, cid: str,
                        caption: str = Form(""),
                        share: str = Form("1")):
     """Upload an image from the player's device."""
-    token, campaign, me = require_member(request, cid)
+    token, campaign, me = await require_member(request, cid)
     if kind not in VALID_KINDS:
         raise HTTPException(400, "unknown image kind")
 
     raw = await file.read(media.MAX_UPLOAD_BYTES + 1)
     try:
-        processed = media.process(raw, kind)
+        processed = await asyncio.to_thread(media.process, raw, kind)
     except media.MediaError as e:
         raise HTTPException(400, str(e))
 
-    m = _store_image(cid, token, processed, kind, caption, "upload")
+    m = await _store_image(cid, token, processed, kind, caption, "upload")
     await _announce_image(cid, m, me, kind, share)
     return _describe(m)
 
@@ -802,7 +735,7 @@ async def import_library(request: Request, cid: str,
     DM can search. Everything else is ignored, so pointing this at a working folder full
     of odds and ends does the sensible thing rather than failing.
     """
-    token, campaign, me = require_member(request, cid)
+    token, campaign, me = await require_member(request, cid)
     images, documents, skipped = [], [], []
 
     for f in files:
@@ -828,16 +761,16 @@ async def import_library(request: Request, cid: str,
     for rel, raw in images:
         kind = _kind_from_folder(rel)
         try:
-            processed = media.process(raw, kind)
+            processed = await asyncio.to_thread(media.process, raw, kind)
         except media.MediaError as e:
             skipped.append({"name": os.path.basename(rel), "why": str(e)})
             continue
-        m = _store_image(cid, token, processed, kind, _caption_from(rel), "upload")
+        m = await _store_image(cid, token, processed, kind, _caption_from(rel), "upload")
         added_images.append(_describe(m))
 
     # The cap is on what the campaign *holds*, not on what one upload carries. Counting
     # only this request let someone import 40 documents as often as they liked.
-    already = {d["name"] for d in store.lore_documents(cid)}
+    already = {d["name"] for d in await A.repo.lore_documents(cid)}
     room = max(0, MAX_LORE_DOCS - len(already))
     keep, over = [], []
     for name, raw in documents:
@@ -855,7 +788,7 @@ async def import_library(request: Request, cid: str,
         if not text.strip():
             skipped.append({"name": name, "why": "no readable text in it"})
             continue
-        added_docs.append(store.add_lore(cid, name, text))
+        added_docs.append(await A.repo.add_lore(cid, name, text))
     for name in over:
         skipped.append({"name": name, "why": f"over the {MAX_LORE_DOCS}-document limit"})
 
@@ -894,30 +827,32 @@ def _caption_from(filename):
 
 @app.get("/api/campaigns/{cid}/lore")
 async def list_lore(request: Request, cid: str):
-    require_member(request, cid)
-    return {"documents": store.lore_documents(cid)}
+    await require_member(request, cid)
+    return {"documents": await A.repo.lore_documents(cid)}
 
 
 @app.delete("/api/campaigns/{cid}/lore/{lid}")
 async def remove_lore(request: Request, cid: str, lid: str):
-    require_member(request, cid)
-    store.delete_lore(cid, lid)
+    await require_member(request, cid)
+    await A.repo.delete_lore(cid, lid)
     return {"ok": True}
 
 
 @app.post("/api/campaigns/{cid}/media/url")
 async def media_from_url(request: Request, cid: str, body: dict = Body(...)):
     """Pull an image in from a link the player pasted."""
-    token, campaign, me = require_member(request, cid)
+    token, campaign, me = await require_member(request, cid)
     kind = body.get("kind", "handout")
     if kind not in VALID_KINDS:
         raise HTTPException(400, "unknown image kind")
     try:
-        processed = media.fetch(body.get("url"), kind)
+        # in a thread: this is network I/O that can take most of two minutes, and on
+        # the event loop it would freeze narration for every table on the server
+        processed = await asyncio.to_thread(media.fetch, body.get("url"), kind)
     except media.MediaError as e:
         raise HTTPException(400, str(e))
 
-    m = _store_image(cid, token, processed, kind, body.get("caption", ""), "link")
+    m = await _store_image(cid, token, processed, kind, body.get("caption", ""), "link")
     await _announce_image(cid, m, me, kind, body.get("share", "1"))
     return _describe(m)
 
@@ -925,7 +860,7 @@ async def media_from_url(request: Request, cid: str, body: dict = Body(...)):
 @app.post("/api/campaigns/{cid}/media/generate")
 async def generate_media(request: Request, cid: str, body: dict = Body(...)):
     """Have an AI draw something. Costs money on every provider that offers it."""
-    token, campaign, me = require_member(request, cid)
+    token, campaign, me = await require_member(request, cid)
     kind = body.get("kind", "scene")
     if kind not in VALID_KINDS:
         raise HTTPException(400, "unknown image kind")
@@ -946,20 +881,20 @@ async def generate_media(request: Request, cid: str, body: dict = Body(...)):
         raise HTTPException(502, str(e))
 
     try:
-        processed = media.process(raw, kind)
+        processed = await asyncio.to_thread(media.process, raw, kind)
     except media.MediaError as e:
         raise HTTPException(502, f"the AI returned something unusable: {e}")
 
-    m = _store_image(cid, token, processed, kind, prompt, "generated")
+    m = await _store_image(cid, token, processed, kind, prompt, "generated")
     await _announce_image(cid, m, me, kind, body.get("share", "1"))
     return _describe(m)
 
 
-async def illustrate(cid, prompt, caption):
+async def illustrate(adapters, cid, prompt, caption):
     """Draw what the DM asked for, away from the turn that asked for it.
 
-    Called as a bare task from `run_dm_turn`, so it outlives the turn and must never
-    raise: the narration has already gone out and the picture is a bonus on top of it.
+    A job on the task queue, enqueued from `run_dm_turn`, so it outlives the turn and
+    must never raise: the narration has already gone out and the picture is a bonus on top of it.
     No artist, a 429 from a free key, a refusal, a campaign already at its image limit -
     all of them end the same way, with a line on the server's log and a table that
     never knew a picture was coming. The rate-limit slot was already spent in
@@ -970,10 +905,10 @@ async def illustrate(cid, prompt, caption):
         return
     try:
         raw, _mime = await artist.draw(prompt)
-        processed = media.process(raw, "scene")
+        processed = await asyncio.to_thread(media.process, raw, "scene")
         # "dm" rather than "generated": the feed says who reached for the pencil, and
         # a picture nobody asked for should be labelled as such
-        m = _store_image(cid, None, processed, "scene", caption or prompt, "dm")
+        m = await _store_image(cid, None, processed, "scene", caption or prompt, "dm")
     except (providers.ProviderExhausted, providers.ProviderFailed, media.MediaError,
             HTTPException) as e:
         print(f"the DM's illustration didn't happen: {e}", file=sys.stderr)
@@ -988,8 +923,8 @@ async def illustrate(cid, prompt, caption):
 async def _announce_image(cid, m, me, kind, share):
     """Put the image in the feed, unless it is a portrait (those live on the sheet)."""
     if kind == "portrait":
-        store.set_portrait(me["_id"], m["id"])
-        await broadcast(cid, party_payload(cid))
+        await A.repo.set_portrait(me["_id"], m["id"])
+        await broadcast(cid, await party_payload(cid))
         return
     if str(share) in ("0", "false", "no"):
         return
@@ -1002,8 +937,8 @@ async def _announce_image(cid, m, me, kind, share):
 @app.get("/api/campaigns/{cid}/media/{mid}")
 async def serve_media(request: Request, cid: str, mid: str):
     """Deliberately not a static mount: only members of the campaign may see these."""
-    require_member(request, cid)
-    m = store.get_media(cid, mid)
+    await require_member(request, cid)
+    m = await A.repo.get_media(cid, mid)
     if not m:
         raise HTTPException(404, "no such image")
     data = media.read(cid, m["file"])
@@ -1018,15 +953,15 @@ async def serve_media(request: Request, cid: str, mid: str):
 
 @app.get("/api/campaigns/{cid}/media")
 async def list_media(request: Request, cid: str):
-    require_member(request, cid)
-    return {"media": [_describe(m) for m in store.campaign_media(cid)]}
+    await require_member(request, cid)
+    return {"media": [_describe(m) for m in await A.repo.campaign_media(cid)]}
 
 
 @app.post("/api/campaigns/{cid}/media/{mid}")
 async def edit_media(request: Request, cid: str, mid: str, body: dict = Body(...)):
     """Change a picture's description, or move it to another shelf."""
-    require_member(request, cid)
-    if not store.get_media(cid, mid):
+    await require_member(request, cid)
+    if not await A.repo.get_media(cid, mid):
         raise HTTPException(404, "no such image")
 
     kind = body.get("kind")
@@ -1037,20 +972,20 @@ async def edit_media(request: Request, cid: str, mid: str, body: dict = Body(...
     if caption is not None:
         caption = str(caption).strip()[:400]
 
-    m = store.update_media(cid, mid, caption=caption, kind=kind)
+    m = await A.repo.update_media(cid, mid, caption=caption, kind=kind)
     return _describe(m)
 
 
 @app.delete("/api/campaigns/{cid}/media/{mid}")
 async def remove_media(request: Request, cid: str, mid: str):
-    token, campaign, me = require_member(request, cid)
-    m = store.get_media(cid, mid)
+    token, campaign, me = await require_member(request, cid)
+    m = await A.repo.get_media(cid, mid)
     if not m:
         raise HTTPException(404, "no such image")
-    store.delete_media(cid, mid)
-    if not store.file_still_used(cid, m["file"]):     # content-addressed: may be shared
+    await A.repo.delete_media(cid, mid)
+    if not await A.repo.file_still_used(cid, m["file"]):     # content-addressed: may be shared
         media.remove(cid, m["file"])
-    await broadcast(cid, party_payload(cid))
+    await broadcast(cid, await party_payload(cid))
     return {"ok": True}
 
 
@@ -1060,8 +995,8 @@ async def remove_media(request: Request, cid: str, mid: str):
 
 @app.get("/api/campaigns/{cid}/export")
 async def export_campaign(request: Request, cid: str):
-    require_member(request, cid)
-    blob = store.export_campaign(cid)
+    await require_member(request, cid)
+    blob = await A.repo.export_campaign(cid)
     title = blob["campaign"]["name"]
     files = blob.get("media") or []
 
@@ -1130,14 +1065,14 @@ async def import_archive(request: Request, file: UploadFile = File(...)):
         raise HTTPException(400, f"that isn't a campaign archive: {type(e).__name__}")
 
     try:
-        campaign = store.import_campaign(blob)
+        campaign = await A.repo.import_campaign(blob)
     except (ValueError, KeyError, TypeError, AttributeError) as e:
         raise HTTPException(400, f"that archive isn't a campaign export: {e}")
 
     _restore_media_files(campaign["id"], blob, _zip_reader(zf))
-    roster = store.party(campaign["id"])
-    if roster and not store.character_for_token(campaign["id"], token):
-        store.claim_character(roster[0]["_id"], token)
+    roster = await A.repo.party(campaign["id"])
+    if roster and not await A.repo.character_for_token(campaign["id"], token):
+        await A.repo.claim_character(roster[0]["_id"], token)
     return campaign
 
 
@@ -1159,7 +1094,7 @@ async def import_folder(request: Request, campaign: str = Form(...),
         raise HTTPException(400, "that folder's campaign.json is not a campaign export")
 
     try:
-        record = store.import_campaign(blob)
+        record = await A.repo.import_campaign(blob)
     except (ValueError, KeyError, TypeError, AttributeError) as e:
         raise HTTPException(400, f"that folder isn't a campaign export: {e}")
 
@@ -1168,9 +1103,9 @@ async def import_folder(request: Request, campaign: str = Form(...),
         images[os.path.basename(f.filename or "")] = await f.read(30 * 1024 * 1024)
     _restore_media_files(record["id"], blob, images.get)
 
-    roster = store.party(record["id"])
-    if roster and not store.character_for_token(record["id"], token):
-        store.claim_character(roster[0]["_id"], token)
+    roster = await A.repo.party(record["id"])
+    if roster and not await A.repo.character_for_token(record["id"], token):
+        await A.repo.claim_character(roster[0]["_id"], token)
     return record
 
 
@@ -1178,13 +1113,13 @@ async def import_folder(request: Request, campaign: str = Form(...),
 async def import_campaign(request: Request, body: dict = Body(...)):
     token = require_auth(request)
     try:
-        campaign = store.import_campaign(body)
+        campaign = await A.repo.import_campaign(body)
     except (ValueError, KeyError, TypeError, AttributeError) as e:
         raise HTTPException(400, f"that file isn't a campaign export: {e}")
     # first character becomes yours unless it already belongs to someone
-    roster = store.party(campaign["id"])
-    if roster and not store.character_for_token(campaign["id"], token):
-        store.claim_character(roster[0]["_id"], token)
+    roster = await A.repo.party(campaign["id"])
+    if roster and not await A.repo.character_for_token(campaign["id"], token):
+        await A.repo.claim_character(roster[0]["_id"], token)
     return campaign
 
 
@@ -1203,6 +1138,17 @@ async def healthz():
 
 
 app.mount("/", StaticFiles(directory=STATIC), name="static")
+
+
+def fresh_adapters(mode=None):
+    """This server's adapters, with its background jobs registered on them."""
+    adapters = build_adapters(mode or os.environ.get("DND_MODE", "lite"))
+    adapters.queue.register("dm_turn", run_dm_turn)
+    adapters.queue.register("illustrate", illustrate)
+    return adapters
+
+
+A = fresh_adapters()
 
 
 if __name__ == "__main__":
