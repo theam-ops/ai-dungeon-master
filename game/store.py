@@ -397,29 +397,37 @@ def party(cid):
     rows = db().execute(
         "SELECT id, player_token, data, portrait, notes FROM characters"
         " WHERE campaign_id=? ORDER BY created_at", (cid,)).fetchall()
-    out = []
-    for r in rows:
-        ch = json.loads(r["data"])
-        ch["_id"] = r["id"]
-        ch["_token"] = r["player_token"]
-        ch["portrait"] = r["portrait"] or ""
-        ch["notes"] = r["notes"] or ""
-        # characters made before skills existed have no `skills` key at all; give them
-        # their class's, here rather than in a migration, since it lives in the blob
-        rules.ensure_skills(ch)
-        # likewise armour: AC is derived now, so a character saved under the old frozen
-        # formula is put in its starting armour and recomputed on first load
-        rules.ensure_items(ch)
-        rules.ensure_equipment(ch)
-        rules.recompute_ac(ch)
-        out.append(ch)
-    # what the sheet shows beside the numbers: load against capacity under this table's
-    # rules, and what a caster has left - derived on every read, like AC
-    variant = campaign_house(cid)["variant_encumbrance"] if out else False
-    for ch in out:
+    out = [character_from_row(r) for r in rows]
+    return with_derived(out, campaign_house(cid) if out else None)
+
+
+def character_from_row(r):
+    """A stored character, brought up to date. Shared with the Postgres repository, so
+    an old sheet is upgraded the same way whichever database it was read from."""
+    ch = json.loads(r["data"])
+    ch["_id"] = r["id"]
+    ch["_token"] = r["player_token"]
+    ch["portrait"] = r["portrait"] or ""
+    ch["notes"] = r["notes"] or ""
+    # characters made before skills existed have no `skills` key at all; give them
+    # their class's, here rather than in a migration, since it lives in the blob
+    rules.ensure_skills(ch)
+    # likewise armour: AC is derived now, so a character saved under the old frozen
+    # formula is put in its starting armour and recomputed on first load
+    rules.ensure_items(ch)
+    rules.ensure_equipment(ch)
+    rules.recompute_ac(ch)
+    return ch
+
+
+def with_derived(characters, house):
+    """What the sheet shows beside the numbers: load against capacity under this table's
+    rules, and what a caster has left - derived on every read, like AC."""
+    variant = house["variant_encumbrance"] if characters else False
+    for ch in characters:
         ch["load"] = rules.encumbrance(ch, variant)
         ch["slots"] = {str(l): [left, top] for l, (left, top) in rules.slots_left(ch).items()}
-    return out
+    return characters
 
 
 # columns of their own, so they must not be written back into the character's data blob
@@ -745,4 +753,4 @@ def import_campaign(blob):
                          " VALUES (?,?,?,?,?)", (_uid(), cid, name, text, now))
 
     conn.commit()
-    return {"id": cid, "code": code, "name": meta.get("name")}
+    return {"id": cid, "code": code, "name": meta.get("name", "Imported campaign")}

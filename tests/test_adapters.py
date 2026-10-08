@@ -244,9 +244,30 @@ def test_an_unregistered_job_is_a_loud_mistake():
 # choosing a mode
 # --------------------------------------------------------------------------- #
 
-def test_prod_mode_says_plainly_that_it_does_not_exist_yet():
-    with pytest.raises(NotImplementedError, match="Phase 8"):
+def test_prod_mode_without_a_database_says_what_it_needs(monkeypatch):
+    pytest.importorskip("asyncpg")
+    monkeypatch.delenv("DATABASE_URL", raising=False)
+    with pytest.raises(RuntimeError, match="DATABASE_URL"):
         build_adapters("prod")
+
+
+def test_prod_mode_without_its_driver_says_what_to_install(monkeypatch):
+    import sys
+    monkeypatch.setitem(sys.modules, "asyncpg", None)       # as if never installed
+    with pytest.raises(RuntimeError, match="requirements-prod.txt"):
+        build_adapters("prod")
+
+
+def test_a_job_argument_must_be_plain_data():
+    """A queue that crosses processes stores arguments as JSON. The one-process queue
+    holds them to the same rule, so a job handed bytes fails in the test suite rather
+    than on the first deployment with more than one server."""
+    async def scenario():
+        queue = AsyncioTaskQueue()
+        queue.register("look", lambda adapters, **kw: asyncio.sleep(0))
+        await queue.enqueue("look", images=[(b"not json", "image/png")])
+    with pytest.raises(TypeError):
+        run(scenario())
 
 
 def test_an_unknown_mode_is_refused():

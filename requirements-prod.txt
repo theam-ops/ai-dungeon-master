@@ -1,0 +1,9 @@
+# Only for DND_MODE=prod - several server processes sharing one Postgres. Playing on
+# one machine needs none of this.
+#
+#     pip install -r requirements-prod.txt
+#
+# See docs/reference.md, "Running on more than one server".
+-r requirements.txt
+
+asyncpg>=0.30

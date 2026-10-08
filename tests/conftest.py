@@ -214,3 +214,65 @@ def _reset_db(store):
     for table in ("events", "media", "lore", "characters", "campaigns"):
         conn.execute(f"DELETE FROM {table}")
     conn.commit()
+
+
+# --------------------------------------------------------------------------- #
+# Postgres, for DND_MODE=prod
+# --------------------------------------------------------------------------- #
+
+@pytest.fixture(scope="session")
+def pg_url():
+    """A Postgres to test against - see tests/pgcluster.py for where it comes from.
+    Skips the test when there is none."""
+    url = os.environ.get("DND_TEST_DATABASE_URL")
+    if url:
+        yield url
+        return
+    pytest.importorskip("asyncpg")
+    from . import pgcluster
+    bindir = pgcluster.binaries()
+    if not bindir:
+        pytest.skip("no Postgres to test against: set DND_TEST_DATABASE_URL, or run "
+                    "tools/fetch_postgres.py")
+    cluster = pgcluster.Cluster(bindir).start()
+    try:
+        yield cluster.url
+    finally:
+        cluster.stop()
+
+
+@pytest.fixture
+def pg_schema(pg_url):
+    """A schema of this test's own, dropped afterwards - so tests share one server
+    without sharing a single row, lock id or NOTIFY channel."""
+    import uuid
+
+    import asyncpg
+    name = "t_" + uuid.uuid4().hex[:12]
+    yield name
+
+    async def drop():
+        conn = await asyncpg.connect(pg_url)
+        try:
+            await conn.execute(f'DROP SCHEMA IF EXISTS "{name}" CASCADE')
+        finally:
+            await conn.close()
+    asyncio.run(drop())
+
+
+@pytest.fixture
+def pg(pg_url, pg_schema):
+    """Build prod adapters on this test's schema: `async with pg() as adapters:`. Call
+    it twice for two servers sharing one database."""
+    from game.adapters.postgres import build
+
+    @contextlib.asynccontextmanager
+    async def make(jobs=True):
+        adapters = build(pg_url, pg_schema)
+        adapters.run_jobs = jobs            # False: a server that never takes a job
+        await adapters.start()
+        try:
+            yield adapters
+        finally:
+            await adapters.aclose()
+    return make

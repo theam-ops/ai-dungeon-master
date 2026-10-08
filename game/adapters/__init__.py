@@ -1,8 +1,7 @@
 """Concrete implementations of `game/ports.py`, chosen once at start-up.
 
 `DND_MODE=lite` (the default) is one process and needs nothing installed. `prod` is
-several processes sharing Postgres and Redis; it is Phase 8 of
-docs/REFACTORING_PLAN.md and does not exist yet.
+any number of processes sharing one Postgres database - see `postgres/`.
 
 The rest of the game receives an `Adapters` and never asks which mode it is in.
 """
@@ -37,8 +36,11 @@ def build_adapters(mode="lite"):
         adapters.queue.bind(adapters)
         return adapters
     if mode == "prod":
-        raise NotImplementedError(
-            "DND_MODE=prod needs the Postgres and Redis adapters, which are Phase 8 of "
-            "docs/REFACTORING_PLAN.md and not built yet. Unset DND_MODE to run as one "
-            "process.")
+        try:
+            import asyncpg  # noqa: F401
+        except ImportError:
+            raise RuntimeError("DND_MODE=prod needs asyncpg: pip install -r "
+                               "requirements-prod.txt") from None
+        from .postgres import build
+        return build()
     raise ValueError(f"DND_MODE must be one of {', '.join(MODES)}, not {mode!r}")

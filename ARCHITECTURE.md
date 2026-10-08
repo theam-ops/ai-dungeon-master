@@ -103,9 +103,11 @@ Run two `lite` instances behind a load balancer and the old problems are all sti
 - two players acting at once on different instances take the same turn twice, because
   neither instance's lock knows about the other.
 
-`DND_MODE=prod` - Postgres and Redis adapters, Phase 8 of the plan - is what removes them.
-It does not exist yet, and `build_adapters("prod")` says so rather than half-working. This
-is also why serverless hosting (Vercel, Netlify, Lambda) still cannot run this application.
+`DND_MODE=prod` is what removes them: every port over one Postgres database, so any
+number of processes serve one table - see [Several servers](#several-servers-dnd_modeprod).
+Serverless hosting (Vercel, Netlify, Lambda) still cannot run this application, in either
+mode: every browser holds a stream open for the whole session, and a DM turn runs for up
+to a minute after the request that asked for it has been answered.
 
 Slow image work — fetching a pasted link, decoding an upload — runs in worker threads via
 `asyncio.to_thread`, never on the loop. The store gives each thread its own connection.
@@ -236,8 +238,9 @@ class defaults on first load.
 cut: it is the record, and what gets exported. What a model is *sent* is a window onto it —
 everything after `campaigns.memory.upto`, with stale party snapshots trimmed — behind a
 synopsis of the rest (`game/services/memory.py`). Every turn still reads and writes the
-column whole, which is the remaining scaling cost in the data model; moving history to rows
-is a Phase 8 question.
+column whole, which is the remaining scaling cost in the data model. Phase 8 kept it one
+column in Postgres too: only the turn writes it, under the turn lock, so it is never
+contended - just big. Rows would buy smaller writes, not correctness.
 
 ### Identity
 
@@ -273,7 +276,8 @@ holds the browser half.
 | `game/services/turn.py` | 129 | the DM turn as a queued job; effect expiry | the adapters it is handed |
 | `game/services/events.py` | 34 | publish (logged) vs broadcast (transient) | the adapters it is handed |
 | `game/ports.py` | 223 | the four interfaces — nothing else | — |
-| `game/adapters/lite.py` | 174 | in-process bus, locks, queue; SQLite repository | `store.py` |
+| `game/adapters/lite.py` | 181 | in-process bus, locks, queue; SQLite repository | `store.py` |
+| `game/adapters/postgres/` | 1,028 | `DND_MODE=prod`: every port over one Postgres — `repo.py`, `live.py` (locks, bus, queue), `schema.py` | Postgres, via asyncpg |
 | `game/providers.py` | 844 | 6 backends, format translation, failover, key storage | — |
 | `game/store.py` | 651 | every SQLite statement; one connection per thread | SQLite |
 | `game/dm.py` | 629 | system prompt, tool schemas, tool execution, prompt assembly | the `repo` the turn lends it |
@@ -283,6 +287,8 @@ holds the browser half.
 | `game/lore.py` | 198 | encoding detection, HTML→text, substring search | — |
 | `game/rulebook.py` | 156 | the SRD: sections by heading, ranked keyword search | `data/srd/*.md` |
 | `tools/fetch_srd.py` | 151 | downloads the SRD 5.1 PDF and converts it to `data/srd/` | — |
+| `tools/migrate_sqlite_to_pg.py` | 121 | copies `campaign.db` into Postgres, ids and `seq` intact | both |
+| `tools/fetch_postgres.py` | 90 | a private Postgres for the prod-mode tests, on Windows | — |
 | `game/i18n.py` | 179 | server strings: gear, narration instruction, CLI | — |
 | `static/js/main.js` | 45 | entry: loads every module in order, then boots | — |
 | `static/js/core/` | 80 | `dom.js`, `state.js`, `api.js` — leaves; import nothing | — |
@@ -320,8 +326,9 @@ round and confuses the narration. Conditional registration is deliberate.
 
 ## Target architecture
 
-> **Status:** the ports and the `lite` adapters are built (Phase 2). The `prod` adapters
-> are Phase 8, and should wait until a measurement says one process is not enough.
+> **Status:** built. The ports and the `lite` adapters in Phase 2; the `prod` adapters in
+> Phase 8, on Postgres alone - the Redis this sketch planned for turned out not to be
+> needed. See [Several servers](#several-servers-dnd_modeprod).
 
 The goal is to make horizontal scaling *possible* without making the single-host install
 *worse*. Those two requirements are in tension, and the resolution is a port/adapter
@@ -346,14 +353,14 @@ graph TB
         L1["asyncio.Queue fan-out"]
         L2["asyncio.Lock"]
         L3["SQLite + WAL"]
-        L4["asyncio.create_task<br/>+ tasks table"]
+        L4["asyncio.create_task"]
     end
 
-    subgraph Prod["Mode: prod — multi-process"]
-        R1["Redis Pub/Sub"]
-        R2["Postgres advisory lock"]
-        R3["Postgres / LibSQL"]
-        R4["ARQ on Redis Streams"]
+    subgraph Prod["Mode: prod — one Postgres, many processes"]
+        R1["LISTEN/NOTIFY<br/>+ the event log"]
+        R2["advisory locks<br/>+ a leases table"]
+        R3["Postgres"]
+        R4["a jobs table<br/>SKIP LOCKED"]
     end
 
     SVC --> P1 & P2 & P3 & P4
@@ -369,32 +376,60 @@ graph TB
 
 **Mode is chosen once at startup** from `DND_MODE` (`lite` | `prod`), defaulting to
 `lite`. There is no per-call branching — `services/` receives injected adapters and never
-asks which mode it is in. Any `if REDIS_URL:` inside business logic is a bug.
+asks which mode it is in. Any `if DATABASE_URL:` inside business logic is a bug.
+
+The safety net under both is the **append-only event log with a monotonic `seq`**. Live
+delivery is allowed to drop things; a browser that missed an event gets it from the log
+when it reconnects. The turn lock is what keeps two turns from writing one campaign's
+state at once - there is no optimistic concurrency on the character row, so the lock is
+load-bearing, not an optimisation.
+
+---
+
+## Several servers (`DND_MODE=prod`)
 
 ```mermaid
 graph LR
-    subgraph prod["prod mode, 3 instances"]
-        I1["uvicorn 1"] & I2["uvicorn 2"] & I3["uvicorn 3"]
-        W1["worker 1"] & W2["worker 2"]
-    end
-    LB["load balancer"] --> I1 & I2 & I3
-    I1 & I2 & I3 <--> RD["Redis<br/>pub/sub + streams"]
-    I1 & I2 & I3 --> PG[("Postgres<br/>rows + advisory locks")]
-    RD --> W1 & W2
-    W1 & W2 --> PG
-    W1 & W2 --> S3[("object storage")]
+    LB["load balancer"] --> W1["server 1<br/>browsers + DM turns"] & W2["server 2<br/>browsers + DM turns"] & W3["server 3<br/>browsers only<br/>DND_RUN_JOBS=0"]
+    W1 & W2 & W3 <--> PG[("Postgres<br/>rows · event log · locks<br/>jobs · NOTIFY")]
+    W1 & W2 & W3 --- M[("media/<br/>one shared folder")]
 ```
 
-Why **Postgres advisory locks rather than a Redis lock** for turn serialisation: it is one
-fewer system in the critical path, and `pg_advisory_xact_lock` is released automatically
-when the transaction ends — including when the worker holding it crashes. A Redis
-`SETNX`+TTL lock needs a fencing token, a Lua compare-and-delete release, and a TTL tuned
-longer than the slowest LLM turn, which is unbounded. Redis stays for pub/sub and the task
-queue, where it is the right tool.
+One Postgres does everything Redis was going to, so a deployment runs one service, not two
+(`game/adapters/postgres/`):
 
-The real safety net is not the lock. It is the **append-only event log with a monotonic
-`seq`** plus optimistic concurrency on the character row. The lock is an optimisation that
-keeps two simultaneous turns from wasting tokens; correctness comes from the log.
+| Port | In Postgres | Why that way |
+|---|---|---|
+| `Repository` | the SQLite schema, JSON kept as TEXT | Every read-then-write is a transaction holding the row it read (`FOR UPDATE`): the summary that may only move forward, the illustration slot, a note added to the history. Appends to one campaign's log take turns under a transaction lock, because a sequence alone does not keep a reader in order - see `EventBus`. |
+| `LockManager` | `hold`: a session advisory lock. `claim`: a row in `leases` with an expiry | An advisory lock belongs to a connection, so a server that dies mid-turn frees its campaign at once - nothing to expire, nothing to renew. Waiters on the same server queue on an asyncio lock first, so only one connection per key per server is ever spent waiting; those come from a pool of their own, so a holder's queries can never wait behind waiters for its own lock. |
+| `EventBus` | `NOTIFY`, one listening connection per server, fanned out locally | A logged event is announced by `seq` only, and each server reads it back from the log - with anything before it not yet delivered. Two servers commit 10 then 11, but their notices may land 11 first; read from the log, 11 brings 10 with it. The same read recovers whatever passed while the listening connection was down. Unlogged events (thinking, streamed text) carry their own payload, through a side table when they exceed NOTIFY's 8000 bytes. |
+| `TaskQueue` | a `jobs` table, taken with `FOR UPDATE SKIP LOCKED` and deleted as it is taken | **At most once.** A DM turn rolls dice and narrates; running one twice would be worse than losing it, so a job whose server dies half way is lost, as on one process. What is new is everything short of that: a queued turn, or an illustration or a combat nudge waiting out its delay, survives a restart. Job arguments must be JSON, and the one-process queue now insists on that too, so the whole suite checks it. |
+
+What each server still keeps to itself, and what that means for a deployment:
+
+- **Pictures are files.** Every server must see the same `media/` folder (`DND_MEDIA` on a
+  shared volume). Object storage behind a `BlobStore` port was in the plan and is not built.
+- **The session key must be shared.** `SESSION_SECRET` is required in prod mode - each
+  server would otherwise make up its own, and a player would be a stranger to the next one.
+- **Pasted keys stay where they were pasted**, so pasting keys into the running app is off
+  by default in prod (`ALLOW_KEY_SETUP`); configure keys in the environment.
+- **"Claude Pro/Max (this machine)"** drives the Claude Code on one machine, and only makes
+  sense on that machine. A multi-server deployment uses API keys.
+
+How it is held to the same behaviour as SQLite: `tests/test_postgres_repo.py` runs one
+scenario through every repository method on both databases and requires identical results;
+the race tests hold a campaign's row from outside while a dozen writers pile up, then let
+them all go at once. `tests/test_postgres_live.py` runs every port across two adapter sets
+sharing one database. `tests/test_prod_two_servers.py` starts two real server processes -
+one of them never running a DM turn - and plays a table split across them. Bugs were
+planted on purpose, one at a time; each of these tests failed on the one it exists to
+catch. They need a Postgres: `tools/fetch_postgres.py` fetches a private one on Windows,
+anything else finds a package-manager install, or `DND_TEST_DATABASE_URL` points at any
+server. Without one they skip.
+
+Moving an existing game: `tools/migrate_sqlite_to_pg.py` copies `campaign.db` - read
+through SQLite, so the newest writes still in the WAL come too - keeping every id and
+every event's `seq`, so join codes, links and each browser's place in the story survive.
 
 ---
 
@@ -409,21 +444,25 @@ the first sketch of it.
 | `EventBus` | `publish(cid, event)`; `async with subscribe(cid) as sub` registered on entry; `sub.next(timeout)` returns `None` on a quiet line | an `asyncio.Queue` per browser | Best effort, by contract: the event log is the guarantee, the bus the fast path. Dropping frames for a stalled subscriber is allowed. |
 | `LockManager` | `async with hold(key)` — a critical section; `claim(key, ttl)` / `release(key)` — a lease | `asyncio.Lock`s, refcounted; a dict of expiries | **Gained `claim`.** Pressing Begin must stay claimed for as long as the opening scene takes to write, which outlives the request — a scoped lock cannot express that. And `hold` has **no timeout**: turns queue behind each other, as they always have. A timeout would have turned "wait your turn" into an error. |
 | `TaskQueue` | `register(name, job)` once at start-up; `enqueue(name, **kwargs)` without waiting | `create_task`, references kept, failures logged | Jobs travel **by name** with plain-data arguments, because a coroutine cannot be sent to another process. A job receives the adapters it should use as its first argument. |
-| `Repository` | every read and write of campaign state, async | delegates to `game/store.py` | 36 methods, mirroring the store. Async even though SQLite is not, so a Postgres adapter changes no caller. |
+| `Repository` | every read and write of campaign state, async | delegates to `game/store.py` | 36 methods, mirroring the store. Async even though SQLite is not, so a Postgres adapter changes no caller — and the one built in Phase 8 changed none. |
+
+The `prod` implementation of each is in [Several servers](#several-servers-dnd_modeprod).
 
 ### Two things the port boundary is not
 
 **It is not a guarantee against races by itself.** In `lite` mode a repository call never
 actually suspends — `await` on a coroutine with no real I/O inside runs straight through —
 so a check followed by a write is atomic by accident. A networked database yields on every
-call. Read-then-write sequences therefore hold a lock: joining a table (`roster:{cid}`:
+call. Read-then-write sequences across several repository calls therefore hold a lock: joining a table (`roster:{cid}`:
 seated already? table full? name taken?) and the image cap (`media:{cid}`).
 `tests/test_ports_races.py` swaps in a repository that yields before every call and checks
 that two people can still not both join as "Bram" — which, without the lock, they could.
+Read-then-write *inside* one repository call is the repository's own job; the Postgres
+one does it with row locks.
 
 **It is not optional.** `tests/test_boundaries.py` reads the syntax tree of everything
-above the ports and fails if any of it imports `game.store`, an adapter, `sqlite3` or
-`redis`, if a service reaches for the server's global adapters instead of the ones it was
+above the ports and fails if any of it imports `game.store`, an adapter, `sqlite3`,
+`asyncpg` or `redis`, if a service reaches for the server's global adapters instead of the ones it was
 handed, if anything calls a repository method the port does not declare, or if a job is
 enqueued under a name nobody registered.
 
@@ -547,8 +586,11 @@ The most useful section for a contributor or an agent. These are decisions, not 
 
 ```bash
 pip install -r requirements-dev.txt
-python -m pytest          # 89 tests, no API key, no model call
+python -m pytest          # 491 tests, no API key, no model call
 ```
+
+The 29 that test `DND_MODE=prod` need a Postgres and skip without one - see
+[Several servers](#several-servers-dnd_modeprod) for where they find it.
 
 Every backend in the suite is a stub: a DM that says exactly what the test scripted, an
 artist that returns four pixels of PNG. Tests run against a throwaway database and media

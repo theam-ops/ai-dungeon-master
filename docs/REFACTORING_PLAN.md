@@ -36,7 +36,7 @@ Sorted by value per unit of work, not by the order the pillars were listed.
 | 5 | Summarisation worker | ~4 days | **Done.** 88% fewer input tokens over 200 turns. |
 | 6 | SRD retrieval | ~3 days | **Done.** SRD 5.1, 2,117 sections. |
 | 7 | Frontend ES modules | ~1 week | **Done.** 25 modules; the page renders byte-identically. |
-| 8 | Postgres + Redis adapters | ~1.5 weeks | **Only if you actually need >1 process.** |
+| 8 | Postgres adapters | ~1.5 weeks | **Done.** On Postgres alone - no Redis. Still only worth deploying if you need >1 process. |
 | 9 | Battle map, fog of war, audio, TTS | ~3 weeks+ | Roughly doubles the frontend. |
 
 **If this gets cut, cut from the bottom.** Phases 0–2 are unambiguous wins. Phase 8 is
@@ -49,7 +49,7 @@ graph LR
     P0["0 · security"] --> P1["1 · AC"]
     P1 --> P3["3 · items"] --> P4["4 · combat"]
     P2["2 · ports"] --> P5["5 · summariser"]
-    P2 --> P8["8 · pg + redis"]
+    P2 --> P8["8 · postgres"]
     P2 --> P9
     P6["6 · SRD"]
     P7["7 · ES modules"] --> P9["9 · map + audio"]
@@ -968,6 +968,55 @@ export const onChange = (fn) => (listeners.add(fn), () => listeners.delete(fn));
 
 ## Phase 8 — prod adapters
 
+> **Done.** `DND_MODE=prod` runs any number of server processes on one Postgres
+> (`game/adapters/postgres/`). The tests ran against a real PostgreSQL 17.6, including two
+> real server processes splitting one table between them. Where it departs from what
+> follows, and why:
+>
+> - **No Redis.** Everything Redis was for, Postgres already does: `LISTEN/NOTIFY` for live
+>   events, a `jobs` table taken with `FOR UPDATE SKIP LOCKED` for the queue. One service
+>   to run instead of two, and nothing to keep consistent between them.
+> - **`hold` is a session advisory lock, not `pg_try_advisory_xact_lock`.** The sketch
+>   below raises when the lock is taken; the port says turns *wait* (see Phase 2). A
+>   session lock on a connection from a pool of its own - entered only by one coroutine
+>   per key per server, the rest queue locally - so a holder's queries never wait behind
+>   waiters for its own lock.
+> - **Pub/sub is not fire-and-forget for logged events.** A logged event is announced by
+>   `seq` only; each server reads it back from the log along with anything before it it has
+>   not delivered. NOTIFYs from two servers can land out of commit order, and a browser shown
+>   11 before 10 would set its bookmark past 10. Appends to one campaign also take turns
+>   under a transaction lock, so a later `seq` is always committed after an earlier one.
+> - **The queue is at most once, not durable to completion.** A job is deleted as it is
+>   taken. A DM turn is not idempotent - it rolls dice and narrates - so re-running one after
+>   a crash would be worse than losing it. Queued and delayed jobs do survive a restart.
+>   Job arguments must be JSON, so `/act` now hands the turn picture ids rather than bytes,
+>   and the `lite` queue checks it too.
+> - **JSON stays TEXT, not JSONB.** Nothing queries inside it, several columns use `''` for
+>   "none", and an export must round-trip byte for byte.
+> - **Not built: the `BlobStore` port (8.3 step 5).** Pictures are still files; every server
+>   must share one `media/` folder. Also: `SESSION_SECRET` is required in prod, and pasting
+>   keys into the running app is off by default there, since a pasted key reaches only the
+>   server that took the request.
+> - **"The whole suite under both modes" (definition of done) is not what was done.** Most
+>   tests set up state through `game/store.py` directly, so they are SQLite tests by
+>   construction. Instead, `tests/test_postgres_repo.py` runs one scenario through every
+>   repository method on both databases and requires identical results; the races are
+>   forced by holding a campaign's row while writers pile up; `tests/test_postgres_live.py`
+>   runs each port across two adapter sets; `tests/test_prod_two_servers.py` plays a table
+>   across two real processes. Seventeen bugs were planted one at a time, and each was
+>   caught. Planting them first showed five of these tests to be too weak - two races that
+>   never actually raced, two claims in the two-server test it did not check, a timing
+>   test that hit its window by luck - and they were rewritten until they failed. (One
+>   still leans on chance: which server takes a job is a race, so "a browsers-only server
+>   ran a turn" is caught when it takes one of five, not by construction.) One bug was
+>   real: the job worker cleared its wake-up after looking for work rather than before, so
+>   a job queued in that gap waited for a five-second poll. It showed up as one flaky run
+>   in nine, and now has a test that puts a job in exactly that gap.
+> - `tools/migrate_sqlite_to_pg.py` (8.3 step 3) reads the SQLite file through SQLite, so
+>   the WAL comes along without a checkpoint and the file is never written; ids and every
+>   `seq` are kept. Found on the way: the Dockerfile never copied `data/`, so a Docker
+>   deployment had no rulebook. Fixed.
+
 **Only build this when a measurement says one process is not enough.** The bottleneck in
 this application is the LLM's response latency, not Python's throughput: a turn spends
 10–60 seconds waiting on a provider and milliseconds in your code. One uvicorn process
@@ -1119,6 +1168,8 @@ timeout longer than the slowest provider response.
 
 Keep Redis for pub/sub and the task queue. Those are the jobs it is good at.
 
+*Phase 8 went one further and dropped Redis altogether - see its notes.*
+
 ### 3. ARQ or a DB-backed queue, not Celery
 
 Celery is a sync-first framework with a broker, a worker, and often a beat process, plus a
@@ -1139,7 +1190,8 @@ Every phase lands with all four, or it is not finished:
    the DM rather than merely being saved.
 2. **Both languages.** Any user-visible string in `en` and `th`, both blocks, same commit.
 3. **Both modes.** Phases 2 onward must pass the suite under `DND_MODE=lite` and
-   `DND_MODE=prod`.
+   `DND_MODE=prod`. *As built, prod is held to lite's behaviour by a differential test of
+   every repository method instead - see Phase 8.*
 4. **Documentation.** `ARCHITECTURE.md` updated if an invariant moved;
    `docs/reference.md` and `docs/reference.th.md` updated if a player-visible feature
    changed, and the short READMEs only if how you start playing did.

@@ -10,7 +10,7 @@ import logging
 import os
 import re
 
-from .. import dm, providers, rules
+from .. import dm, media as media_files, providers, rules
 from .events import broadcast, party_payload, publish
 from .memory import maybe_summarize
 
@@ -68,15 +68,30 @@ async def expire_effects(adapters, cid, characters):
                                                "changes": changes})
 
 
-async def run_dm_turn(adapters, cid, actor, action, images=None, claim=None):
+async def turn_images(adapters, cid, media_ids):
+    """The pictures a player attached, read off disk for the DM to look at."""
+    out = []
+    for mid in (media_ids or [])[:4]:          # a hard cap: images are expensive context
+        m = await adapters.repo.get_media(cid, mid)
+        if not m:
+            continue
+        data = media_files.read(cid, m["file"])
+        if data:
+            out.append((data, m["mime"]))
+    return out
+
+
+async def run_dm_turn(adapters, cid, actor, action, media=None, claim=None):
     """One DM turn, broadcast to the whole table. Serialized per campaign.
 
-    `claim` is a lease taken by `begin` that this turn must give back however it ends -
-    the opening scene stays claimed for exactly as long as it takes the DM to write it.
+    `media` is the ids of pictures the player attached. `claim` is a lease taken by
+    `begin` that this turn must give back however it ends - the opening scene stays
+    claimed for exactly as long as it takes the DM to write it.
     """
     try:
         async with adapters.locks.hold(turn_key(cid)):
-            await _turn(adapters, cid, actor, action, images)
+            await _turn(adapters, cid, actor, action,
+                        await turn_images(adapters, cid, media))
         # outside the lock: condensing the story is slow, and no turn should wait on it
         await maybe_summarize(adapters, cid)
     finally:

@@ -7,5 +7,8 @@
 # implements the same contract as `game/providers.Backend.stream`, so a whole session
 # runs without any model being called, and spends nothing.
 -r requirements.txt
+# the Postgres driver, for the DND_MODE=prod tests - which skip unless a Postgres is
+# found too (see tests/pgcluster.py)
+-r requirements-prod.txt
 
 pytest>=8.0

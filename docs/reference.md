@@ -383,6 +383,49 @@ Leave it unset for localhost-only use. `MAX_TURNS_PER_MIN` (default 12) caps how
 single campaign can burn turns — worth keeping now that a campaign can fail over onto a
 second billing account.
 
+## Running on more than one server
+
+You almost certainly don't need this. One copy of the game serves a great many tables: a
+turn spends ten to sixty seconds waiting for the AI and a few milliseconds in the game's
+own code. This is for when one server measurably isn't enough.
+
+With `DND_MODE=prod`, any number of copies of the server share one PostgreSQL database -
+the campaigns, the story so far, who is mid-turn, and the DM turns waiting to run. A player
+can land on any of them, and everyone still sees one table.
+
+```bash
+pip install -r requirements-prod.txt
+export DND_MODE=prod
+export DATABASE_URL=postgresql://user:password@host:5432/dnd
+export SESSION_SECRET=some-long-random-string
+uvicorn server:app --host 0.0.0.0 --port 8000
+```
+
+Every server needs:
+
+- **the same `DATABASE_URL` and the same `SESSION_SECRET`.** Prod mode will not start
+  without the secret: each server would make up its own, and a player signed in on one
+  would be a stranger to the next.
+- **the same `media/` folder.** Pictures are files, not rows - point `DND_MEDIA` at a
+  shared volume.
+- **its AI keys in the environment.** Pasting a key into the running app is off by
+  default in this mode, because the key would reach only the server that took the request.
+
+Optional: `DND_PG_SCHEMA` keeps the tables in a schema of their own, and `DND_RUN_JOBS=0`
+makes a server that answers browsers but leaves the DM's turns to the others.
+
+To move a game you already run, stop it, then:
+
+```bash
+python tools/migrate_sqlite_to_pg.py --database-url postgresql://user:password@host:5432/dnd
+```
+
+That copies `campaign.db` with every id and every event's number unchanged, so join codes,
+links and everyone's place in the story carry over. Then copy the `media/` folder across.
+
+"Claude Pro/Max (this machine)" does not work this way - it drives the Claude Code
+installed on one machine. A deployment with several servers uses API keys.
+
 ---
 
 ## Solo or party — your choice
@@ -683,6 +726,7 @@ close the tab, it reconnects and replays only what it missed — the scene is ne
 game/rules.py    dice, ability scores, character generation   (no I/O)
 game/dm.py       system prompt, tools, the async turn loop
 game/store.py    SQLite: campaigns, characters, event log
+game/adapters/   how the game reaches storage: lite (one process), postgres (several)
 game/i18n.py     server-side strings: gear, DM language instruction, CLI
 game/media.py    image validation, EXIF stripping, URL guards, the file store
 game/providers.py  the AI backends, format translation, and failover
@@ -699,6 +743,12 @@ tests/           pytest, driven by a stub DM — no API key, no model call
 pip install -r requirements-dev.txt
 python -m pytest
 ```
+
+The tests for running on several servers need a PostgreSQL. On Windows,
+`python tools/fetch_postgres.py` fetches a private copy (a 330 MB download; nothing is
+installed, and the tests start and stop it themselves). Elsewhere they find one installed
+by your package manager, or set `DND_TEST_DATABASE_URL` to any server. Without one, those
+tests are skipped and everything else still runs.
 
 They need no API key and never reach a model: a stub backend stands in for the AI and
 records what it was handed, which is how the tests can assert that a player's own notes

@@ -8,6 +8,7 @@ the `prod` adapters exist to change.
 """
 
 import asyncio
+import json
 import logging
 import time
 from contextlib import asynccontextmanager
@@ -134,6 +135,10 @@ class AsyncioTaskQueue(TaskQueue):
         job = self._jobs.get(job_name)
         if job is None:
             raise KeyError(f"no job registered as {job_name!r}")
+        # Nothing here needs it, but a queue that crosses processes stores the arguments
+        # as JSON - so they are held to that on one process too, where the whole test
+        # suite runs, rather than first failing on a deployment.
+        json.dumps(kwargs)
         task = asyncio.create_task(self._run(job_name, job, kwargs, delay))
         self._running.add(task)
         task.add_done_callback(self._running.discard)

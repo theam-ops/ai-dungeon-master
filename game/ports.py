@@ -128,8 +128,8 @@ class Repository(ABC):
 
     The method set mirrors `game/store.py`, the SQLite implementation it grew out of,
     so `lite` is a thin delegation and the names are already familiar. Async even
-    though SQLite is not: a Postgres or LibSQL implementation will be, and the callers
-    must not have to change when it arrives.
+    though SQLite is not, because the Postgres one (`prod`) is - and no caller changed
+    when it arrived.
 
     Characters are plain dicts - the sheet from `rules.new_character` - carrying their
     row id as `_id` and their owner's token as `_token`. `party` returns them already

@@ -11,12 +11,19 @@ Environment:
     *_MODELS            optional - which models each provider offers
     DM_BACKEND          optional - which AI new campaigns start on
     APP_PASSWORD        optional - gate the whole app behind one password
-    SESSION_SECRET      optional - cookie signing key (generated and cached if unset)
+    SESSION_SECRET      optional - cookie signing key (generated and cached if unset;
+                        required with DND_MODE=prod)
     ALLOW_KEY_SETUP     optional - set 0 to forbid pasting keys into the running app
+                        (default 1; 0 with DND_MODE=prod)
     DND_KEYS            optional - where pasted keys are stored (default .keys.json)
     DND_DB              optional - path to the SQLite file
     DND_MODE            optional - `lite` (default): one process, nothing to install.
-                        `prod` is planned, not built - see docs/REFACTORING_PLAN.md
+                        `prod`: any number of processes sharing one Postgres -
+                        see docs/reference.md, "Running on more than one server"
+    DATABASE_URL        prod - the Postgres connection string
+    DND_PG_SCHEMA       prod, optional - the schema to keep tables in (default public)
+    DND_RUN_JOBS        prod, optional - 0 for a server that answers browsers but never
+                        runs DM turns, leaving them to the others (default 1)
     MAX_TURNS_PER_MIN   optional - per-campaign spend backstop (default 12)
     DM_ART_EVERY_TURNS  optional - player turns between DM illustrations (default 6)
     COMBAT_TURN_GRACE   optional - seconds an idle combat turn waits before it passes
@@ -51,7 +58,7 @@ from game.adapters import build_adapters
 from game.services import events
 from game.services.events import public_character
 from game.services.memory import summarize
-from game.services.turn import combat_nudge, run_dm_turn, turn_key
+from game.services.turn import combat_nudge, run_dm_turn, turn_images, turn_key
 from game.services.turn import player_safe  # noqa: F401 - re-exported; tests use it here
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -64,14 +71,22 @@ MAX_TURNS_PER_MIN = int(os.environ.get("MAX_TURNS_PER_MIN", "12"))
 
 DEFAULT_TITLE = {"en": "An untitled campaign", "th": "แคมเปญไร้ชื่อ"}
 
+PROD = os.environ.get("DND_MODE", "lite").strip().lower() == "prod"
+
 # Pasting a key into the running app is convenient but it spends money, so it can be
-# turned off entirely on a shared deployment.
-KEY_SETUP_ENABLED = os.environ.get("ALLOW_KEY_SETUP", "1") not in ("0", "false", "no")
+# turned off entirely on a shared deployment. Off by default with several servers: a
+# pasted key lands on whichever one took the request, and the others never see it.
+KEY_SETUP_ENABLED = os.environ.get("ALLOW_KEY_SETUP", "0" if PROD else "1") not in (
+    "0", "false", "no")
 
 
 def _session_secret():
     if os.environ.get("SESSION_SECRET"):
         return os.environ["SESSION_SECRET"]
+    if PROD:
+        # each server would make up its own, and a player signed in on one would be a
+        # stranger to the next
+        raise RuntimeError("DND_MODE=prod needs SESSION_SECRET, the same on every server")
     # cache one on disk so sessions survive a restart during local dev
     path = os.path.join(HERE, ".session_secret")
     if os.path.exists(path):
@@ -617,15 +632,7 @@ async def party_payload(cid):
 
 async def load_images(cid, media_ids):
     """Read attached images off disk for the DM to look at."""
-    out = []
-    for mid in (media_ids or [])[:4]:          # a hard cap: images are expensive context
-        m = await A.repo.get_media(cid, mid)
-        if not m:
-            continue
-        data = media.read(cid, m["file"])
-        if data:
-            out.append((data, m["mime"]))
-    return out
+    return await turn_images(A, cid, media_ids)
 
 
 @app.post("/api/campaigns/{cid}/act")
@@ -657,8 +664,10 @@ async def act(request: Request, cid: str, body: dict = Body(...)):
     # the DM gets a nudge the players don't see, so a model that can't look at
     # pictures still knows one was produced
     dm_text = text + (f"\n\n[{me['name']} shows the table an image]" if images else "")
+    # the pictures go by id, not as bytes: a queued job's arguments must survive being
+    # written to a database and read back by another process
     await A.queue.enqueue("dm_turn", cid=cid, actor=me["name"], action=dm_text,
-                          images=images)
+                          media=attached if images else None)
     return {"ok": True}
 
 
