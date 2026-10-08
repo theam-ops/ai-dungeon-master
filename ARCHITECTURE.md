@@ -197,6 +197,7 @@ erDiagram
         TEXT house "optional table rules, JSON"
         TEXT combat "the fight in progress, JSON, or empty"
         TEXT memory "synopsis of turns before upto, JSON"
+        TEXT map "the battle map, fog and all, JSON, or empty"
         TEXT history "ENTIRE transcript as JSON"
         REAL last_art "art slot refill clock"
     }
@@ -286,6 +287,7 @@ holds the browser half.
 | `game/media.py` | 286 | image validation, EXIF stripping, SSRF guards, file store | — |
 | `game/lore.py` | 198 | encoding detection, HTML→text, substring search | — |
 | `game/rulebook.py` | 156 | the SRD: sections by heading, ranked keyword search | `data/srd/*.md` |
+| `game/battlemap.py` | 376 | **the battle map: grid, tokens, line of sight, fog — no I/O**; `public_view` is all a browser ever gets | — |
 | `tools/fetch_srd.py` | 151 | downloads the SRD 5.1 PDF and converts it to `data/srd/` | — |
 | `tools/migrate_sqlite_to_pg.py` | 121 | copies `campaign.db` into Postgres, ids and `seq` intact | both |
 | `tools/fetch_postgres.py` | 90 | a private Postgres for the prod-mode tests, on Windows | — |
@@ -293,7 +295,7 @@ holds the browser half.
 | `static/js/main.js` | 45 | entry: loads every module in order, then boots | — |
 | `static/js/core/` | 80 | `dom.js`, `state.js`, `api.js` — leaves; import nothing | — |
 | `static/js/i18n/` | 592 | `en.js`, `th.js` (one string table each), `index.js` (lookup) | — |
-| `static/js/*.js` | 2,220 | one module per part of the page: stream, composer, dash, drawer, … | `api.js` |
+| `static/js/*.js` | 3,037 | one module per part of the page: stream, composer, dash, drawer, … — and `map.js` (canvas), `sound.js` (ambience, made in the browser), `voice.js` (speech) | `api.js` |
 | `dnd.py` / `play.py` | 322 / 272 | terminal client / tool CLI | none — no campaign |
 
 **Dependency direction is strictly inward.** `rules.py` depends on nothing but `i18n`.
@@ -317,6 +319,8 @@ drive the rules without a web server and the CLI share the same DM.
 | `lookup_rule` | when a rulebook is installed | section-aware search of the SRD 5.1 in `data/srd/` |
 | `search_lore` | only with documents | substring search over the campaign library |
 | `draw_scene` | only with an image provider | one slot per `DM_ART_EVERY_TURNS` turns |
+| `update_map` | table rule *Battle map* | draws the grid in rectangles, places and moves tokens, reveals areas; returns the map as text |
+| `set_ambience` | table rule *Background sound* | one of ten moods; each browser that opted in plays it |
 
 `dm.tools_for(cid)` assembles the list per campaign. **A tool with nothing behind it is
 worse than no tool** — the model reaches for it anyway and gets an error, which spends a
@@ -476,6 +480,34 @@ Code a `call_tool` in turn, so neither reaches back for storage.
 
 ---
 
+## The battle map, the sound and the voice
+
+Phase 9, and the part of this project most likely to be turned off. Every piece of it is
+optional, and none of it is on until somebody asks for it.
+
+- **The battle map** is a table rule. The DM draws it with `update_map` in rectangles -
+  a shape a model gets right, where it does not get a 300-character grid right - and every
+  turn it is shown the whole map as text, coordinates spelled out. **The fog is the
+  server's.** A browser is only ever sent `battlemap.public_view`: unseen cells arrive as
+  `?`, and a monster standing in them does not arrive at all. The fog is the party's,
+  shared; it lifts by line of sight (six squares, stopped by walls and closed doors) as
+  player characters are placed or moved, and where the DM reveals more. A player moves only
+  their own token - the request carries no name - to a seen cell they can walk to.
+  The map and a drag are one atomic `change_map`, so a drag and the DM's redraw cannot undo
+  each other, on SQLite or on Postgres. One honest gap: an *export* is a full backup, and
+  carries the whole map, as it carries the DM's own tool calls in the history.
+- **Background sound** is a table rule too, and then each player's own choice, off by
+  default. The DM picks one of ten moods with `set_ambience`; `static/js/sound.js` makes
+  it, in the browser, from noise, filters and short synthesised events. There are no audio
+  files: nothing to license, nothing to download, and no URL the DM could be talked into
+  naming. A limiter sits last, so nothing clips.
+- **Narration read aloud** is the browser's own speech - free, offline, Thai wherever the
+  device has a Thai voice - per player, off by default, and only for narration that
+  arrives live, never the replayed story. When the device has no voice for the campaign's
+  language the switch says so rather than reading Thai in an English voice.
+
+---
+
 ## Known defects
 
 Verified against the code, not inferred. Fixed ones stay listed, with what fixed them,
@@ -586,10 +618,10 @@ The most useful section for a contributor or an agent. These are decisions, not 
 
 ```bash
 pip install -r requirements-dev.txt
-python -m pytest          # 491 tests, no API key, no model call
+python -m pytest          # 538 tests, no API key, no model call
 ```
 
-The 29 that test `DND_MODE=prod` need a Postgres and skip without one - see
+The 31 that test `DND_MODE=prod` need a Postgres and skip without one - see
 [Several servers](#several-servers-dnd_modeprod) for where they find it.
 
 Every backend in the suite is a stub: a DM that says exactly what the test scripted, an

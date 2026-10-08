@@ -170,6 +170,15 @@ class Repository(ABC):
     async def set_combat(self, cid, combat):
         """Store the fight; None ends it."""
     @abstractmethod
+    async def get_map(self, cid):
+        """The battle map, fog and hidden tokens included - see game/battlemap.py - or
+        None. What a browser may see is `battlemap.public_view` of it, never this."""
+    @abstractmethod
+    async def change_map(self, cid, change):
+        """Apply `change(current_map) -> new_map_or_None` atomically, and return the
+        result. Atomic against every other change to the same map, on every server:
+        a token dragged while the DM redraws the room must not undo either."""
+    @abstractmethod
     async def delete_campaign(self, cid): ...
 
     # -- characters ---------------------------------------------------------- #

@@ -28,7 +28,7 @@ from game.adapters.postgres.repo import _t       # noqa: E402
 # table -> (columns, the default for each when an older database lacks the column)
 TABLES = {
     "campaigns": {"id": None, "code": None, "name": None, "lang": "en", "backend": "",
-                  "house": "{}", "combat": "", "memory": "", "history": "[]",
+                  "house": "{}", "combat": "", "memory": "", "map": "", "history": "[]",
                   "last_art": 0.0, "created_at": 0.0, "updated_at": 0.0},
     "characters": {"id": None, "campaign_id": None, "player_token": None, "name": None,
                    "data": None, "notes": "", "portrait": "", "created_at": 0.0},

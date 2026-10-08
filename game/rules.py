@@ -576,6 +576,8 @@ def carries(ch, name):
 # anything not listed here is dropped on the way in rather than stored.
 HOUSE_RULES = {
     "variant_encumbrance": False,     # slower past STR x 5, worse past STR x 10
+    "battle_map": False,              # a grid with tokens and fog - see game/battlemap.py
+    "ambience": False,                # the DM sets a mood; browsers that opted in play it
 }
 
 

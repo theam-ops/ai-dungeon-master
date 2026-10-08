@@ -5,6 +5,7 @@ import { $, el, icon } from "./core/dom.js";
 import { S } from "./core/state.js";
 import { t, tClass, tRace, tSkill, tStat } from "./i18n/index.js";
 import { mediaUrl, openLightbox } from "./images.js";
+import { cardMap, mapOn } from "./map.js";
 import { renderHud, renderParty } from "./party.js";
 import { scrollFeed } from "./stream.js";
 
@@ -295,7 +296,13 @@ export function cardRolls() {
 /* Status, items and skills are what you check mid-scene, so they share one page.
    Abilities and the roll log are reference, and go behind their own tab. */
 export const VIEWS = ["story", "character", "detail", "party"];
-export const VIEW_ICONS = { story: "story", character: "scroll", detail: "skill", party: "party" };
+export const VIEW_ICONS = { story: "story", character: "scroll", detail: "skill", party: "party",
+                            map: "map" };
+
+/* The map gets a tab of its own on a phone, beside the story - only while there is one. */
+export function views() {
+  return mapOn() ? ["story", "map", ...VIEWS.slice(1)] : VIEWS;
+}
 
 /* Not persisted, deliberately. The HUD's collapsed state is remembered because it is a
    strip; a remembered view tab means closing the app on "Skills" and reopening it to no
@@ -308,12 +315,15 @@ export function renderDash() {
   const c = S.party.find((p) => p.name === (S.campaign && S.campaign.you));
   box.innerHTML = "";
   const wide = DESKTOP.matches;
+  if (view === "map" && !mapOn()) view = "story";
 
   if (c) {
     if (wide) {
       // all of it at once; the topbar strip already carries the party on a wide screen
-      [cardCombat(), cardVitals(c), cardConditions(c), cardSlots(c), cardItems(c),
+      [cardMap(), cardCombat(), cardVitals(c), cardConditions(c), cardSlots(c), cardItems(c),
        cardSkills(c), cardAbilities(c), cardRolls()].forEach((n) => n && box.append(n));
+    } else if (view === "map") {
+      [cardMap(), cardCombat()].forEach((n) => n && box.append(n));
     } else if (view === "character") {
       [cardCombat(), cardVitals(c), cardConditions(c), cardSlots(c), cardItems(c),
        cardSkills(c)]
@@ -336,7 +346,7 @@ export function renderViewTabs() {
   const bar = $("view-tabs");
   bar.innerHTML = "";
   if (DESKTOP.matches) return;
-  VIEWS.forEach((name) => {
+  views().forEach((name) => {
     const b = el("button", "gtab" + (name === view ? " on" : ""));
     b.type = "button";
     b.append(icon(VIEW_ICONS[name]), el("span", "", t("view_" + name)));

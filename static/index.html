@@ -36,6 +36,7 @@
   <symbol id="ic-cond" viewBox="0 0 24 24"><path d="M12 3l9 16H3z"/><path d="M12 9v5M12 16.5v.5"/></symbol>
   <symbol id="ic-skill" viewBox="0 0 24 24"><path d="M4 20l7-7M9 6l9 9 3-3-9-9-3 3zM6 9L3 6l3-3 3 3"/></symbol>
   <symbol id="ic-story" viewBox="0 0 24 24"><path d="M4 5h7v15H4zM13 5h7v15h-7z"/><path d="M11 5v15"/></symbol>
+  <symbol id="ic-map" viewBox="0 0 24 24"><path d="M3 6l6-2 6 2 6-2v14l-6 2-6-2-6 2z"/><path d="M9 4v14M15 6v14"/></symbol>
   <symbol id="ic-art" viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="14" rx="2"/><path d="M3 14l5-4 4 3 3-2 6 5"/><circle cx="8.5" cy="8.5" r="1.2"/></symbol>
   <symbol id="ic-gear" viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M12 2v3M12 19v3M2 12h3M19 12h3M5 5l2 2M17 17l2 2M19 5l-2 2M7 17l-2 2"/></symbol>
   <symbol id="ic-scroll" viewBox="0 0 24 24"><path d="M6 4h11a2 2 0 0 1 2 2v12a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2z"/><path d="M8 8h7M8 12h7M8 16h4"/></symbol>
@@ -224,6 +225,23 @@
       <input type="file" id="portrait-file" accept="image/png,image/jpeg,image/webp,image/gif" hidden>
       <p class="hint" id="portrait-note"></p>
 
+      <!-- yours alone, kept in this browser: nobody else at the table hears your choice -->
+      <h3 class="section-label" data-i18n="sound_voice"></h3>
+      <div class="hidden" id="sound-row">
+        <label class="house-toggle">
+          <input type="checkbox" id="sound-on">
+          <span data-i18n="sound_on"></span>
+        </label>
+        <input type="range" class="volume" id="sound-vol" min="0" max="1" step="0.05"
+               data-i18n-title="sound_volume">
+        <p class="hint" data-i18n="sound_hint"></p>
+      </div>
+      <label class="house-toggle">
+        <input type="checkbox" id="voice-on">
+        <span data-i18n="voice_on"></span>
+      </label>
+      <p class="hint" id="voice-note"></p>
+
       </div><!-- /you -->
 
       <div class="dtab-page hidden" data-tab="art">
@@ -263,6 +281,16 @@
         <span data-i18n="house_variant_enc"></span>
       </label>
       <p class="hint" data-i18n="house_variant_enc_hint"></p>
+      <label class="house-toggle">
+        <input type="checkbox" id="house-battle-map">
+        <span data-i18n="house_battle_map"></span>
+      </label>
+      <p class="hint" data-i18n="house_battle_map_hint"></p>
+      <label class="house-toggle">
+        <input type="checkbox" id="house-ambience">
+        <span data-i18n="house_ambience"></span>
+      </label>
+      <p class="hint" data-i18n="house_ambience_hint"></p>
 
       <div class="hidden" id="rulebook-credit">
         <h3 class="section-label" data-i18n="rules_source"></h3>

@@ -162,6 +162,17 @@ def declared_names(src):
                     break
             if j < len(toks) and toks[j][0] == "id":
                 names.add(toks[j][1])
+            # `let a = 0, b = f(1, 2), c;` declares a, b and c: every comma at the
+            # declaration's own depth starts another, until its semicolon
+            if text in ("const", "let", "var"):
+                depth0 = toks[k][2]
+                for j in range(k + 1, len(toks)):
+                    kind_j, text_j, depth_j = toks[j]
+                    if depth_j < depth0 or (text_j == ";" and depth_j == depth0):
+                        break
+                    if (text_j == "," and depth_j == depth0 and j + 1 < len(toks)
+                            and toks[j + 1][0] == "id"):
+                        names.add(toks[j + 1][1])
         # parameters: identifiers inside ( ... ) followed by => or {
         if text == "(":
             depth0, j, inner = toks[k][2], k + 1, []

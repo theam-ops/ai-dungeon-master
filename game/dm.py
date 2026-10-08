@@ -7,7 +7,7 @@ The model narrates and judges. Every die and every point of damage goes through
 import json
 import os
 
-from . import i18n, lore, providers, rulebook, rules
+from . import battlemap, i18n, lore, providers, rulebook, rules
 
 # tokens kept free for the model's answer when a small context is being budgeted
 REPLY_ROOM = 1000
@@ -329,6 +329,97 @@ END_COMBAT_TOOL = {
 
 COMBAT_TOOLS = [INITIATIVE_TOOL, NEXT_TURN_TOOL, END_COMBAT_TOOL]
 
+# ---- the battle map and the ambience: table rules, off unless the table turns them on ----
+
+MAP_PROCEDURE = """\
+THE BATTLE MAP
+- This table plays with a map. The <map> block shows all of it, including what the party has
+  not seen; the players only see the cells marked seen, and their own tokens.
+- When the party enters a place worth mapping - a room, a clearing, a street, the field of a
+  fight - draw it with update_map: start a new map, paint walls and rooms in rectangles, and
+  place every player character and every creature that matters. Keep maps small: 10-25 cells
+  a side. One cell is 5 feet.
+- The party sees around itself automatically as tokens move. Reveal more yourself when they
+  would see it - a lit hall, a view from a height, a map they found.
+- Move creatures' tokens as you narrate them moving. Players move their own tokens by
+  dragging them; respect where they put them.
+- The map shows positions; you still narrate. Do not read coordinates out to the players."""
+
+PAINT = {"type": "object", "properties": {
+    "terrain": {"type": "string",
+                "enum": ["room", "wall", "floor", "door", "water", "difficult"],
+                "description": "room = walls around the edge, floor inside."},
+    "x1": {"type": "integer"}, "y1": {"type": "integer"},
+    "x2": {"type": "integer"}, "y2": {"type": "integer"}},
+    "required": ["terrain", "x1", "y1", "x2", "y2"], "additionalProperties": False}
+
+AREA = {"type": "object", "properties": {
+    "x1": {"type": "integer"}, "y1": {"type": "integer"},
+    "x2": {"type": "integer"}, "y2": {"type": "integer"}},
+    "required": ["x1", "y1", "x2", "y2"], "additionalProperties": False}
+
+MAP_TOOL = {
+    "name": "update_map",
+    "description": (
+        "Draw or change the battle map. Applied in order: clear_map, then a new map (when "
+        "new_width and new_height are above 0), then paint, tokens, remove_tokens, reveal. "
+        "Coordinates are cells: x across from 0, y down from 0, rectangles inclusive. "
+        "Returns the map as it now stands."
+    ),
+    "strict": True,
+    "input_schema": {
+        "type": "object",
+        "properties": {
+            "clear_map": {"type": "boolean", "description": "Put the map away entirely."},
+            "new_width": {"type": "integer", "description": "Start a new map; 0 keeps the current one."},
+            "new_height": {"type": "integer", "description": "0 keeps the current map."},
+            "fill": {"type": "string", "enum": ["floor", "wall"],
+                     "description": "What a new map starts as: wall for a dungeon you carve "
+                                    "rooms into, floor for open ground."},
+            "paint": {"type": "array", "items": PAINT, "description": "Empty if none."},
+            "tokens": {"type": "array", "description": "Place or move. Empty if none.",
+                       "items": {"type": "object", "properties": {
+                           "name": {"type": "string",
+                                    "description": "A player character's exact name, or the "
+                                                   "creature's name. Number duplicates."},
+                           "kind": {"type": "string", "enum": ["pc", "npc"]},
+                           "x": {"type": "integer"}, "y": {"type": "integer"}},
+                           "required": ["name", "kind", "x", "y"],
+                           "additionalProperties": False}},
+            "remove_tokens": {"type": "array", "items": {"type": "string"},
+                              "description": "Names to take off the map. Empty if none."},
+            "reveal": {"type": "array", "items": AREA,
+                       "description": "Areas the party can now see. Empty if none."},
+            "reveal_all": {"type": "boolean", "description": "The party can see everything."},
+        },
+        "required": ["clear_map", "new_width", "new_height", "fill", "paint", "tokens",
+                     "remove_tokens", "reveal", "reveal_all"],
+        "additionalProperties": False,
+    },
+}
+
+MOODS = ["silence", "tavern", "forest", "night", "dungeon", "sea", "rain", "storm",
+         "campfire", "battle"]
+
+AMBIENCE_PROCEDURE = """\
+AMBIENCE
+- This table plays with background sound. When the scene's place or mood changes - into the
+  tavern, out onto the night road, down into the crypt, a fight breaking out - call
+  set_ambience once with the closest mood. Not every turn: only when it changes. The
+  players hear it; never mention it in the narration."""
+
+AMBIENCE_TOOL = {
+    "name": "set_ambience",
+    "description": "Change the background sound the players hear to suit the scene.",
+    "strict": True,
+    "input_schema": {
+        "type": "object",
+        "properties": {"mood": {"type": "string", "enum": MOODS}},
+        "required": ["mood"],
+        "additionalProperties": False,
+    },
+}
+
 RULES_PROCEDURE = """\
 LOOKING UP RULES
 - You have the D&D 5e rulebook (SRD 5.1) through lookup_rule. When a player tries something
@@ -412,14 +503,20 @@ IMAGE_TOOL = {
 }
 
 
-async def tools_for(cid, repo=None):
+async def tools_for(cid, repo=None, house=None):
     """The tool list for this campaign: the base set, plus lore when there is any,
-    plus drawing when some backend can draw."""
+    plus drawing when some backend can draw, plus the map and the ambience when the
+    table has turned them on."""
     tools = list(TOOLS)
     if cid and repo is None:
         raise ValueError("tools_for for a campaign needs its repository - pass repo=, from the adapters")
     if cid:
         tools.extend(COMBAT_TOOLS)     # a fight lives on the campaign, so needs one
+        house = house or {}
+        if house.get("battle_map"):
+            tools.append(MAP_TOOL)
+        if house.get("ambience"):
+            tools.append(AMBIENCE_TOOL)
     if rulebook.installed():           # no rulebook, no tool: it would only ever fail
         tools.append(RULES_TOOL)
     if cid and await repo.lore_documents(cid):
@@ -527,6 +624,24 @@ async def _combat(name, args, characters, cid, repo):
     text += (f"It is {acting['name']}'s turn" + ("" if acting["pc"] else " - an NPC: run it")
              + f". Order: {json.dumps(rules.combat_view(combat, characters), ensure_ascii=False)}")
     return text, {**event, "state": combat}
+
+
+async def _update_map(args, characters, cid, repo):
+    """update_map. The map changes in one step against whatever is stored - a player
+    may have dragged a token since this turn began - and the event carries only what
+    the party can see, because every browser at the table receives it."""
+    notes = []
+
+    def change(current):
+        new, said = battlemap.apply(current, args, [c["name"] for c in characters])
+        notes.extend(said)
+        return current if said and said[0].startswith("ERROR") else new
+
+    stored = await repo.change_map(cid, change)
+    if notes and notes[0].startswith("ERROR"):
+        return notes[0], None
+    text = "\n".join(notes + [battlemap.describe(stored) if stored else "There is no map now."])
+    return text, {"kind": "map", "map": battlemap.public_view(stored)}
 
 
 def _spend_slot(args, characters, lang, house):
@@ -674,6 +789,17 @@ async def run_tool(name, args, characters, lang="en", cid=None, repo=None, house
         if not cid or repo is None:
             return "ERROR: a fight needs a campaign to keep its initiative order in.", None
         return await _combat(name, args, characters, cid, repo)
+    if name == "update_map":
+        if not cid or repo is None or not (house or {}).get("battle_map"):
+            return "ERROR: this table does not play with a map.", None
+        return await _update_map(args, characters, cid, repo)
+    if name == "set_ambience":
+        if not cid or not (house or {}).get("ambience"):
+            return "ERROR: this table does not play with background sound.", None
+        mood = args.get("mood")
+        if mood not in MOODS:
+            return f"ERROR: mood must be one of {', '.join(MOODS)}.", None
+        return f"The table now hears: {mood}.", {"kind": "ambience", "mood": mood}
     if name == "long_rest":
         return _long_rest(args, characters, lang, house)
 
@@ -761,7 +887,8 @@ async def run_tool(name, args, characters, lang="en", cid=None, repo=None, house
                     "changes": changes}
 
 
-def build_prompt(characters, actor, action, lang="en", house=None, combat=None):
+def build_prompt(characters, actor, action, lang="en", house=None, combat=None,
+                 battle=None):
     """One player turn, labelled so the DM knows who acted.
 
     The acting player's standing notes ride here, in the turn itself, rather than in
@@ -786,11 +913,14 @@ def build_prompt(characters, actor, action, lang="en", house=None, combat=None):
             fight += (f'<combat_note>It is {acting_now["name"]}\'s turn, not {actor}\'s. '
                       f"Treat {actor}'s action as a reaction if it fits one; otherwise it "
                       "happens on their turn. Do not refuse them.</combat_note>\n\n")
+    grid = ""
+    if battle and (house or {}).get("battle_map"):
+        grid = f"<map>\n{battlemap.describe(battle)}\n</map>\n\n"
     return (f"<party_state>{rules.state_block(characters, lang, house)}</party_state>\n\n"
-            f"{fight}{notes}{who} {action}")
+            f"{grid}{fight}{notes}{who} {action}")
 
 
-async def system_blocks(lang, cid=None, repo=None, synopsis=None):
+async def system_blocks(lang, cid=None, repo=None, synopsis=None, house=None):
     """Base prompt stays cached; the language instruction rides after it as its own
     block, so switching language doesn't invalidate the cached prefix.
 
@@ -805,6 +935,10 @@ async def system_blocks(lang, cid=None, repo=None, synopsis=None):
     blocks.append({"type": "text", "text": COMBAT_PROCEDURE if cid else COMBAT_FICTION})
     if rulebook.installed():
         blocks.append({"type": "text", "text": RULES_PROCEDURE})
+    if cid and (house or {}).get("battle_map"):
+        blocks.append({"type": "text", "text": MAP_PROCEDURE})
+    if cid and (house or {}).get("ambience"):
+        blocks.append({"type": "text", "text": AMBIENCE_PROCEDURE})
     if cid:
         if repo is None:
             raise ValueError("system_blocks for a campaign needs its repository - pass repo=, from the adapters")
@@ -832,8 +966,8 @@ async def _run(backend, history, characters, lang, images=None, cid=None, repo=N
     """
     memory = memory or {}
     upto = max(0, min(int(memory.get("upto", 0)), len(history)))
-    system = await system_blocks(lang, cid, repo, memory.get("synopsis"))
-    tools = await tools_for(cid, repo)
+    system = await system_blocks(lang, cid, repo, memory.get("synopsis"), house)
+    tools = await tools_for(cid, repo, house)
 
     # a model with a small context (a local Ollama) gets only as many recent turns as
     # fit after the system prompt, the tool definitions - over 2,000 tokens on their
@@ -906,7 +1040,7 @@ async def _run(backend, history, characters, lang, images=None, cid=None, repo=N
 
 async def take_turn(history, characters, actor, action, lang="en", backend_id=None,
                     images=None, cid=None, repo=None, house=None, combat=None,
-                    memory=None):
+                    memory=None, battle=None):
     """Run one DM turn. Async generator of events; mutates history and characters.
 
     Yields {"kind": "delta"|"narration"|"dice"|"sheet"|"draw"|"switch"|"error", ...}.
@@ -920,7 +1054,7 @@ async def take_turn(history, characters, actor, action, lang="en", backend_id=No
     lang = i18n.normalise(lang)
     history.append({"role": "user",
                     "content": build_prompt(characters, actor, action, lang, house,
-                                            combat)})
+                                            combat, battle)})
     mark = len(history)
     images = images or []
 

@@ -23,6 +23,7 @@ CREATE TABLE IF NOT EXISTS campaigns (
     house       TEXT NOT NULL DEFAULT '{}',
     combat      TEXT NOT NULL DEFAULT '',
     memory      TEXT NOT NULL DEFAULT '',
+    map         TEXT NOT NULL DEFAULT '',
     history     TEXT NOT NULL DEFAULT '[]',
     last_art    DOUBLE PRECISION NOT NULL DEFAULT 0,
     created_at  DOUBLE PRECISION NOT NULL,
@@ -93,6 +94,9 @@ CREATE TABLE IF NOT EXISTS bus_spill (
     payload     TEXT NOT NULL,
     created_at  DOUBLE PRECISION NOT NULL
 );
+
+-- columns added after a database may already exist
+ALTER TABLE campaigns ADD COLUMN IF NOT EXISTS map TEXT NOT NULL DEFAULT '';
 
 CREATE INDEX IF NOT EXISTS idx_lore_campaign ON lore(campaign_id);
 CREATE INDEX IF NOT EXISTS idx_media_campaign ON media(campaign_id);

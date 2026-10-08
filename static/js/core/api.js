@@ -10,8 +10,10 @@ export async function api(path, opts = {}) {
   if (!res.ok) {
     let detail = res.statusText;
     try { detail = (await res.json()).detail || detail; } catch (_) {}
-    const err = new Error(detail);
+    // a refusal the browser can put in the player's language comes as {code, text}
+    const err = new Error(typeof detail === "object" ? detail.text : detail);
     err.status = res.status;
+    if (typeof detail === "object") err.code = detail.code;
     throw err;
   }
   return res.status === 204 ? null : res.json();

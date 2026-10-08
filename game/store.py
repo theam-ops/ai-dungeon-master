@@ -12,7 +12,7 @@ import threading
 import string
 import time
 
-from . import rules            # for the character-shape migration in party()
+from . import battlemap, rules  # rules for the character-shape migration in party()
 
 DB_PATH = os.environ.get("DND_DB", os.path.join(os.path.dirname(os.path.dirname(
     os.path.abspath(__file__))), "campaign.db"))
@@ -35,6 +35,7 @@ CREATE TABLE IF NOT EXISTS campaigns (
     house       TEXT NOT NULL DEFAULT '{}',
     combat      TEXT NOT NULL DEFAULT '',
     memory      TEXT NOT NULL DEFAULT '',
+    map         TEXT NOT NULL DEFAULT '',
     history     TEXT NOT NULL DEFAULT '[]',
     last_art    REAL NOT NULL DEFAULT 0,
     created_at  REAL NOT NULL,
@@ -158,6 +159,8 @@ def _migrate(conn):
         conn.execute("ALTER TABLE campaigns ADD COLUMN combat TEXT NOT NULL DEFAULT ''")
     if "house" not in cols:
         conn.execute("ALTER TABLE campaigns ADD COLUMN house TEXT NOT NULL DEFAULT '{}'")
+    if "map" not in cols:
+        conn.execute("ALTER TABLE campaigns ADD COLUMN map TEXT NOT NULL DEFAULT ''")
     if "last_art" not in cols:
         conn.execute("ALTER TABLE campaigns ADD COLUMN last_art REAL NOT NULL DEFAULT 0")
     chcols = {r["name"] for r in conn.execute("PRAGMA table_info(characters)")}
@@ -266,6 +269,39 @@ def set_combat(cid, combat):
                  (json.dumps(combat, ensure_ascii=False) if combat else "", time.time(), cid))
     conn.commit()
     return combat
+
+
+def get_map(cid):
+    """The battle map, everything on it - fog and hidden monsters included - or None.
+    Never send this to a browser: `battlemap.public_view` is what the table may see."""
+    row = db().execute("SELECT map FROM campaigns WHERE id=?", (cid,)).fetchone()
+    try:
+        return battlemap.clean(json.loads(row["map"])) if row and row["map"] else None
+    except (TypeError, ValueError):
+        return None
+
+
+def change_map(cid, change):
+    """Read the map, hand it to `change`, store what comes back (None puts it away).
+
+    One step, not a get and a set: a player dragging their token and the DM redrawing
+    the room may land at the same moment, and whichever wrote second would silently
+    undo the other. Here no await separates the read from the write; the Postgres
+    repository holds the row instead. `change` must be quick and pure.
+    """
+    conn = db()
+    row = conn.execute("SELECT map FROM campaigns WHERE id=?", (cid,)).fetchone()
+    if row is None:
+        return None
+    try:
+        current = battlemap.clean(json.loads(row["map"])) if row["map"] else None
+    except (TypeError, ValueError):
+        current = None
+    new = change(current)
+    conn.execute("UPDATE campaigns SET map=?, updated_at=? WHERE id=?",
+                 (json.dumps(new, ensure_ascii=False) if new else "", time.time(), cid))
+    conn.commit()
+    return new
 
 
 def set_campaign_backend(cid, backend):
@@ -629,7 +665,7 @@ def export_campaign(cid):
         "campaign": {"name": c["name"], "code": c["code"], "lang": c["lang"] or "en",
                      "backend": c["backend"] or "", "history": json.loads(c["history"]),
                      "house": campaign_house(cid), "combat": get_combat(cid),
-                     "memory": get_memory(cid)},
+                     "memory": get_memory(cid), "map": get_map(cid)},
         "characters": [{k: v for k, v in ch.items() if k != "_id"} for ch in party(cid)],
         "events": events_since(cid, 0, limit=100000),
         "media": [{k: v for k, v in m.items() if k not in ("campaign_id",)}
@@ -682,6 +718,11 @@ def _imported_memory(memory, history):
                       ensure_ascii=False)
 
 
+def _imported_map(m):
+    m = battlemap.clean(m)
+    return json.dumps(m, ensure_ascii=False) if m else ""
+
+
 def import_campaign(blob):
     if not isinstance(blob, dict):
         raise ValueError("not an AI DM campaign export")
@@ -706,12 +747,13 @@ def import_campaign(blob):
 
     conn.execute(
         "INSERT INTO campaigns (id, code, name, lang, backend, house, combat, memory,"
-        " history, created_at, updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?)",
+        " map, history, created_at, updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
         (cid, code, meta.get("name", "Imported campaign"), meta.get("lang", "en"),
          meta.get("backend", ""), json.dumps(rules.clean_house(meta.get("house"))),
          json.dumps(meta["combat"], ensure_ascii=False)
          if isinstance(meta.get("combat"), dict) and meta["combat"].get("order") else "",
          _imported_memory(meta.get("memory"), history),
+         _imported_map(meta.get("map")),
          json.dumps(history, ensure_ascii=False), now, now))
 
     # media first: characters reference their portrait by id

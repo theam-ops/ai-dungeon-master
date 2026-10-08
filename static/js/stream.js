@@ -7,7 +7,10 @@ import { renderDash, renderLive } from "./dash.js";
 import { HOUSE_KEYS, renderHouse, renderRecap } from "./drawer.js";
 import { renderChange, t } from "./i18n/index.js";
 import { mediaUrl, openLightbox, renderPortrait } from "./images.js";
+import { mapOn, redrawAll } from "./map.js";
 import { HUD_ROLLS, renderHud } from "./party.js";
+import { setMood, stopSound } from "./sound.js";
+import { speak } from "./voice.js";
 
 /* ── the live stream ────────────────────────────────────────────────── */
 
@@ -17,6 +20,7 @@ export function connect() {
   if (S.es) S.es.close();
   const es = new EventSource(`/api/campaigns/${S.campaign.id}/stream?since=${S.lastSeq}`);
   S.es = es;
+  S.replaying = true;
 
   es.onmessage = (e) => {
     retryDelay = 1500;                 // a live connection resets the backoff
@@ -55,6 +59,9 @@ export function handle(ev) {
 
   switch (ev.kind) {
     case "ready":
+      // the story so far has been replayed; what comes next is live
+      S.replaying = false;
+      if (S.ambience && (S.campaign.house || {}).ambience) setMood(S.ambience);
       scrollFeed(true);
       break;
 
@@ -74,6 +81,7 @@ export function handle(ev) {
       S.lastScene = ev.text;
       if (!node.isConnected) $("feed").append(node);
       S.live = null;
+      if (!S.replaying) speak(ev.text);
       scrollFeed();
       break;
     }
@@ -137,6 +145,21 @@ export function handle(ev) {
       break;
     }
 
+    case "map": {
+      // only ever what the party can see - the server never sends the rest
+      const had = mapOn();
+      S.map = ev.map || null;
+      if (had !== mapOn()) renderDash();     // the map card or tab comes or goes
+      else redrawAll();
+      break;
+    }
+
+    case "ambience":
+      // during the replay just remember it; the last one is played on "ready"
+      S.ambience = ev.mood;
+      if (!S.replaying && (S.campaign.house || {}).ambience) setMood(ev.mood);
+      break;
+
     case "rule":
       // the DM looked something up in the rulebook - shown like a roll is
       appendChip(el("div", "lore-chip", t("checked_rules", (ev.found || []).join(", "))));
@@ -154,6 +177,11 @@ export function handle(ev) {
       Object.entries(ev.changed || {}).forEach(([rule, on]) => appendChip(el("div",
         "join-chip", t(on ? "house_on" : "house_off", ev.character, t("house_" + HOUSE_KEYS[rule])))));
       renderHouse();
+      if ("ambience" in (ev.changed || {})) {
+        if (ev.changed.ambience && S.ambience) setMood(S.ambience);
+        else stopSound();
+      }
+      renderLive();                          // the map card follows its rule
       break;
 
     case "image": {

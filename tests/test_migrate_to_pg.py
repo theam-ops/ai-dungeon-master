@@ -10,7 +10,7 @@ import sys
 
 import pytest
 
-from game import rules, store
+from game import battlemap, rules, store
 from game.adapters.lite import SQLiteRepository
 
 pytest.importorskip("asyncpg")      # the tool imports it; without it there is nothing to test
@@ -32,6 +32,7 @@ async def a_game_in_progress(repo):
         await repo.save_history(cid, [{"role": "user", "content": "Begin."},
                                       {"role": "assistant", "content": "Salt wind."}])
         await repo.set_memory(cid, {"upto": 1, "synopsis": "They met.", "turns": 1})
+        await repo.change_map(cid, lambda m: battlemap.new_map(9, 7))
         vess = await repo.add_character(
             cid, rules.new_character("Vess", "Elf", "Rogue", scores=SCORES), "tok-a", "Shy.")
         await repo.add_character(
@@ -64,6 +65,7 @@ def test_every_campaign_reads_back_exactly_as_it_was(pg_url, pg_schema):
         try:
             for cid in cids:
                 for method in ("export_campaign", "get_campaign", "party", "campaign_media",
+                               "get_map",
                                "lore_documents", "get_memory", "get_combat", "last_seq"):
                     want = await getattr(sqlite, method)(cid)
                     got = await getattr(pg.repo, method)(cid)

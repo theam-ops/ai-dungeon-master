@@ -7,7 +7,10 @@ import { S } from "./core/state.js";
 import { renderLive, setView } from "./dash.js";
 import { renderHouse, renderRecap, renderRulebookCredit } from "./drawer.js";
 import { renderAttachments } from "./images.js";
+import { resetMap } from "./map.js";
+import { stopSound } from "./sound.js";
 import { connect } from "./stream.js";
+import { hush } from "./voice.js";
 
 /* ── entering a campaign ────────────────────────────────────────────── */
 
@@ -28,6 +31,11 @@ export async function enterCampaign(id) {
   S.attached = [];
   S.lastScene = "";
   S.rolls = [];        // rolls belong to the campaign you are in, not the browser
+  S.map = null;        // rebuilt from the replay, as the feed is
+  S.ambience = null;
+  resetMap();
+  stopSound();
+  hush();
   renderAttachments();
   localStorage.setItem("campaign_id", id);
 
@@ -40,6 +48,8 @@ export async function enterCampaign(id) {
 
 $("btn-leave").onclick = () => {
   if (S.es) { S.es.close(); S.es = null; }
+  stopSound();
+  hush();
   localStorage.removeItem("campaign_id");
   S.campaign = null;
   boot();

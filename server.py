@@ -53,7 +53,7 @@ from fastapi.responses import (FileResponse, JSONResponse, Response,
 from fastapi.staticfiles import StaticFiles
 from starlette.middleware.sessions import SessionMiddleware
 
-from game import claude_code, i18n, lore, media, providers, rulebook, rules
+from game import battlemap, claude_code, i18n, lore, media, providers, rulebook, rules
 from game.adapters import build_adapters
 from game.services import events
 from game.services.events import public_character
@@ -578,6 +578,34 @@ async def set_house(request: Request, cid: str, body: dict = Body(...)):
         await publish(cid, "house", {"character": me["name"], "changed": changed})
         await broadcast(cid, await party_payload(cid))
     return {"house": house}
+
+
+@app.post("/api/campaigns/{cid}/map/move")
+async def move_token(request: Request, cid: str, body: dict = Body(...)):
+    """Drag your own token. There is no name in the request on purpose, as with notes:
+    the token moved is the one belonging to the character this browser plays."""
+    _, _, me = await require_member(request, cid)
+    if not (await A.repo.campaign_house(cid))["battle_map"]:
+        raise HTTPException(400, "this table is not playing with a map")
+    try:
+        x, y = int(body.get("x")), int(body.get("y"))
+    except (TypeError, ValueError):
+        raise HTTPException(400, "say where to move to")
+    refused = []
+
+    def change(current):
+        moved, why = battlemap.move(current, me["name"], x, y)
+        if why:
+            refused.append(why)
+            return current
+        return moved
+
+    stored = await A.repo.change_map(cid, change)
+    if refused:
+        raise HTTPException(400, {"code": refused[0], "text": battlemap.REFUSALS[refused[0]]})
+    # a snapshot of what the party can see, not a delta: moving may have revealed cells
+    await publish(cid, "map", {"map": battlemap.public_view(stored), "moved": me["name"]})
+    return {"ok": True}
 
 
 @app.get("/api/campaigns/{cid}/events")

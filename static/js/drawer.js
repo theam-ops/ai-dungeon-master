@@ -11,6 +11,8 @@ import { renderPortrait } from "./images.js";
 import { renderLore } from "./library.js";
 import { fillNotes } from "./notes.js";
 import { renderHud } from "./party.js";
+import { setSoundOn, setVolume, soundOn, soundVolume } from "./sound.js";
+import { canSpeak, setVoiceOn, speak, voiceFor, voiceOn } from "./voice.js";
 
 /* What is left in the drawer once the sheet moved to the dashboard: your own things,
    the campaign's art, and the table's settings. Remembered between opens - unlike the
@@ -21,7 +23,8 @@ export let drawerTab = localStorage.getItem("dtab") || "you";
 if (!DRAWER_TABS.includes(drawerTab)) drawerTab = "you";
 
 /* The table's optional rules. Server keys on the left, string suffixes on the right. */
-export const HOUSE_KEYS = { variant_encumbrance: "variant_enc" };
+export const HOUSE_KEYS = { variant_encumbrance: "variant_enc", battle_map: "battle_map",
+                            ambience: "ambience" };
 
 /* The campaign's synopsis, as the DM is given it. Text only - it came from a model. */
 export function renderRecap() {
@@ -41,22 +44,57 @@ export function renderRulebookCredit() {
   $("rulebook-attribution").textContent = credit || "";
 }
 
+const houseBox = (rule) => $("house-" + HOUSE_KEYS[rule].replace(/_/g, "-"));
+
 export function renderHouse() {
-  const box = $("house-variant-enc");
-  if (box && S.campaign) box.checked = !!(S.campaign.house || {}).variant_encumbrance;
+  if (!S.campaign) return;
+  Object.keys(HOUSE_KEYS).forEach((rule) => {
+    const box = houseBox(rule);
+    if (box) box.checked = !!(S.campaign.house || {})[rule];
+  });
+  renderSound();
 }
 
-$("house-variant-enc").onchange = async (e) => {
-  const on = e.target.checked;
-  try {
-    const r = await api(`/api/campaigns/${S.campaign.id}/house`,
-                        { method: "POST", body: { variant_encumbrance: on } });
-    S.campaign.house = r.house;
-  } catch (err) {
-    e.target.checked = !on;           // the server said no; show what is actually set
-    toast(err.message);
-  }
+Object.keys(HOUSE_KEYS).forEach((rule) => {
+  houseBox(rule).onchange = async (e) => {
+    const on = e.target.checked;
+    try {
+      const r = await api(`/api/campaigns/${S.campaign.id}/house`,
+                          { method: "POST", body: { [rule]: on } });
+      S.campaign.house = r.house;
+    } catch (err) {
+      e.target.checked = !on;         // the server said no; show what is actually set
+      toast(err.message);
+    }
+  };
+});
+
+/* Sound and voice are this player's own choices, kept in this browser. The sound
+   switch only appears when the table plays with ambience - there is nothing to hear
+   otherwise - and the voice switch says plainly when the device has no voice for the
+   campaign's language, rather than reading Thai in an English accent. */
+export function renderSound() {
+  const table = !!(S.campaign && (S.campaign.house || {}).ambience);
+  $("sound-row").classList.toggle("hidden", !table);
+  $("sound-on").checked = soundOn();
+  $("sound-vol").value = String(soundVolume());
+  $("sound-vol").disabled = !soundOn();
+  $("voice-on").checked = voiceOn();
+  $("voice-on").disabled = !canSpeak();
+  const lang = (S.campaign && S.campaign.lang) || "en";
+  $("voice-note").textContent = !canSpeak() ? t("voice_none")
+    : voiceFor(lang) ? t("voice_hint") : t("voice_missing_" + lang);
+}
+
+$("sound-on").onchange = (e) => { setSoundOn(e.target.checked); renderSound(); };
+$("sound-vol").oninput = (e) => setVolume(parseFloat(e.target.value));
+$("voice-on").onchange = (e) => {
+  setVoiceOn(e.target.checked);
+  if (e.target.checked && S.lastScene) speak(S.lastScene);   // hear what it sounds like
 };
+if (canSpeak()) window.speechSynthesis.addEventListener("voiceschanged", () => {
+  if (!$("drawer").classList.contains("hidden")) renderSound();
+});
 
 export function showDrawerTab(name) {
   drawerTab = name;
@@ -79,6 +117,7 @@ export function openDrawer(open) {
   $("scrim").classList.toggle("hidden", !open);
   if (open) { showDrawerTab(drawerTab);
               renderAI(); renderPortrait(); renderLore(); renderGallery(); fillNotes();
+              renderSound();
               $("library-note").textContent = t("library_hint"); }
   else $("ai-list").classList.add("hidden");
 }

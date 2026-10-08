@@ -18,7 +18,7 @@ import time
 
 import asyncpg
 
-from ... import rules, store
+from ... import battlemap, rules, store
 from ...ports import Repository
 
 
@@ -123,6 +123,26 @@ class PostgresRepository(Repository):
             "UPDATE campaigns SET combat=$2, updated_at=$3 WHERE id=$1",
             cid, _t(_dumps(combat)) if combat else "", time.time())
         return combat
+
+    @staticmethod
+    def _map(text):
+        try:
+            return battlemap.clean(json.loads(text)) if text else None
+        except (TypeError, ValueError):
+            return None
+
+    async def get_map(self, cid):
+        return self._map(await self._column(cid, "map"))
+
+    async def change_map(self, cid, change):
+        async with self._pool.acquire() as conn, conn.transaction():
+            row = await conn.fetchrow("SELECT map FROM campaigns WHERE id=$1 FOR UPDATE", cid)
+            if row is None:
+                return None
+            new = change(self._map(row["map"]))
+            await conn.execute("UPDATE campaigns SET map=$2, updated_at=$3 WHERE id=$1",
+                               cid, _t(_dumps(new)) if new else "", time.time())
+            return new
 
     async def set_campaign_backend(self, cid, backend):
         await self._pool.execute("UPDATE campaigns SET backend=$2, updated_at=$3 WHERE id=$1",
@@ -367,7 +387,8 @@ class PostgresRepository(Repository):
                          "backend": c["backend"] or "", "history": json.loads(c["history"]),
                          "house": await self.campaign_house(cid),
                          "combat": await self.get_combat(cid),
-                         "memory": await self.get_memory(cid)},
+                         "memory": await self.get_memory(cid),
+                         "map": await self.get_map(cid)},
             "characters": [{k: v for k, v in ch.items() if k != "_id"}
                            for ch in await self.party(cid)],
             "events": await self.events_since(cid, 0, limit=100000),
@@ -409,13 +430,15 @@ class PostgresRepository(Repository):
         async with self._pool.acquire() as conn, conn.transaction():
             await conn.execute(
                 "INSERT INTO campaigns (id, code, name, lang, backend, house, combat, memory,"
-                " history, created_at, updated_at) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$10)",
+                " map, history, created_at, updated_at)"
+                " VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$11)",
                 cid, code, _t(store._text(name, "Imported campaign")),
                 store._text(meta.get("lang"), "en"), store._text(meta.get("backend")),
                 json.dumps(rules.clean_house(meta.get("house"))),
                 _t(_dumps(meta["combat"]))
                 if isinstance(meta.get("combat"), dict) and meta["combat"].get("order") else "",
                 _t(store._imported_memory(meta.get("memory"), history)),
+                _t(store._imported_map(meta.get("map"))),
                 _t(_dumps(history)), now)
 
             # media first: characters reference their portrait by id

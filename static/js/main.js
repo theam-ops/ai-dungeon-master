@@ -24,6 +24,9 @@ import "./composer.js";
 import "./party.js";
 import "./dash.js";
 import "./drawer.js";
+import "./map.js";
+import "./sound.js";
+import "./voice.js";
 
 import { boot } from "./boot.js";
 import { enterCampaign } from "./campaign.js";
@@ -33,6 +36,7 @@ import { showDash } from "./dash.js";
 import { openDrawer, showDrawerTab } from "./drawer.js";
 import { applyI18n, setLang } from "./i18n/index.js";
 import { refreshUI } from "./lang.js";
+import { measureMood, soundState } from "./sound.js";
 import { handle } from "./stream.js";
 
 showDash(localStorage.getItem("dash") !== "0");
@@ -40,6 +44,6 @@ showDash(localStorage.getItem("dash") !== "0");
 /* For the console, and for the frontend equivalence check in docs/REFACTORING_PLAN.md:
    with modules, nothing is global any more. */
 window.__dm = { S, handle, enterCampaign, openDrawer, showDrawerTab, refreshUI, show,
-                setLang, applyI18n };
+                setLang, applyI18n, soundState, measureMood };
 
 boot();

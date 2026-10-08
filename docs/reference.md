@@ -467,6 +467,26 @@ They are capped at 600 characters, deliberately: every one of them is re-sent on
 turn, and six players' worth of preamble would push the actual scene down the prompt.
 Write what should always be true, not what you are doing this turn.
 
+## A battle map, background sound, the story read aloud
+
+Three things a table can add. All are off until someone turns them on.
+
+**Battle map** (drawer → Table → Table rules). The DM draws the scene on a grid - rooms,
+doors, water, rough ground - and puts everyone on it. You see what the party can see:
+the rest stays dark until someone gets there, and nothing hiding in the dark is sent to
+your browser at all. Move your own token by dragging it, or by tapping it and then
+tapping where to go; you can walk anywhere the party has seen, but not through walls. One
+square is 5 feet. On a phone the map has its own tab beside the story.
+
+**Background sound** (drawer → Table → Table rules). The DM sets the mood as the scene
+changes - a tavern, rain, a storm, a crypt, a fight. Each player then chooses whether to
+hear it, under drawer → You, with a volume slider. The sound is made in your browser; there
+is nothing to download.
+
+**Read the narration aloud** (drawer → You). Your device reads new narration in its own
+voice, in the campaign's language. It is free and nothing is sent anywhere. For Thai, the
+device needs a Thai voice installed - the switch tells you if it has none.
+
 ## ภาษาไทย — Thai support
 
 Tap **ไทย** in the language switcher (on the login screen, at the bottom of the lobby,

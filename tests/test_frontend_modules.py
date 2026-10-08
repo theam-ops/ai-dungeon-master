@@ -131,3 +131,11 @@ def test_every_module_parses(rel):
     r = subprocess.run(["node", "--input-type=module", "--check"],
                        input=MODULES[rel], capture_output=True, text=True, encoding="utf-8")
     assert r.returncode == 0, f"{rel}: {r.stderr.strip()[:300]}"
+
+
+def test_the_reader_sees_every_name_in_one_declaration():
+    """`let a = 0, b = f(1, 2), c;` declares three names. Reading only the first made
+    the accidental-globals check cry wolf at `b` and `c`."""
+    found = J.declared_names("let a = 0, b = f(1, 2), c;\nconst x = [1, 2], y = 3;\nz = 4;")
+    assert {"a", "b", "c", "x", "y"} <= found and "z" not in found
+    assert "z" in J.assigned_names("let a = 0, b = 1;\nz = 4;") - found

@@ -745,6 +745,18 @@ button:disabled { opacity: .45; cursor: default; }
 
 .house-toggle { display: flex; align-items: center; gap: 10px; margin: 4px 0 2px; cursor: pointer; }
 .house-toggle input { width: 18px; height: 18px; accent-color: var(--gold); }
+.house-toggle input:disabled + span { color: var(--muted); }
+.volume { width: 100%; max-width: 260px; margin: 6px 0 0 28px; accent-color: var(--gold); }
+
+/* the battle map: a canvas the card's width, never wider - a 40-square map on a phone
+   gets small squares, not a sideways scroll */
+.map-card { overflow: hidden; }
+.map-canvas {
+  display: block; max-width: 100%; border-radius: 6px;
+  border: 1px solid var(--edge); background: #0c0b0a;
+  cursor: pointer; touch-action: manipulation;
+}
+.map-canvas:focus-visible { outline: 2px solid var(--gold); outline-offset: 2px; }
 .sheet-list { font-size: 15px; color: #cfc3b0; margin: 0 0 12px; }
 .sheet-list b {
   display: block; font-family: var(--display); font-size: 11px; letter-spacing: .12em;

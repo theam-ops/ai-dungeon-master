@@ -37,7 +37,7 @@ Sorted by value per unit of work, not by the order the pillars were listed.
 | 6 | SRD retrieval | ~3 days | **Done.** SRD 5.1, 2,117 sections. |
 | 7 | Frontend ES modules | ~1 week | **Done.** 25 modules; the page renders byte-identically. |
 | 8 | Postgres adapters | ~1.5 weeks | **Done.** On Postgres alone - no Redis. Still only worth deploying if you need >1 process. |
-| 9 | Battle map, fog of war, audio, TTS | ~3 weeks+ | Roughly doubles the frontend. |
+| 9 | Battle map, fog of war, audio, TTS | ~3 weeks+ | **Done**, behind table rules, all off by default. |
 
 **If this gets cut, cut from the bottom.** Phases 0–2 are unambiguous wins. Phase 8 is
 infrastructure you should not buy until a measurement says you need it — a single uvicorn
@@ -1094,6 +1094,41 @@ mode the same port is `asyncio.create_task` plus a `tasks` row for durability, s
 ---
 
 ## Phase 9 — battle map, audio, TTS
+
+> **Done**, and every part of it optional: two table rules (*Battle map*, *Background
+> sound*), both off, and two per-player switches (sound, narration read aloud), both off.
+> Checked in a browser on a desktop and a phone, in English and Thai. Where it departs from
+> what follows, and why:
+>
+> - **One map per campaign, drawn in rectangles.** The DM's `update_map` paints rooms,
+>   walls, doors, water and rough ground as rectangles and places tokens by coordinate; it
+>   is shown the whole map every turn as text, every token's position spelled out. A model
+>   reading a character grid is good at "Vess at 4,7" and bad at counting columns.
+> - **The fog lifts by line of sight**, not only by the DM revealing cells: whenever a
+>   player character is placed or moves, what it can see within six squares - walls and
+>   closed doors block - is revealed. The fog is the party's, shared, not per player.
+> - **Server-authoritative, as specified.** Every browser gets `public_view`: unseen cells
+>   as `?`, and no token standing on one. Tested by looking for the hidden monster's name in
+>   every event, the log and the campaign detail. An export is a full backup and does carry
+>   the whole map, as it carries the DM's tool calls.
+> - **A player moves only their own token** (the request has no name in it), only to a seen
+>   cell, and only along a path of seen cells: dragging is walking, not blinking through a
+>   wall. Distance is not limited - the turn order guides rather than polices, as in Phase 4.
+>   Refusals come back as codes the browser translates.
+> - **No CC0 loops.** Every mood is synthesised in the browser with the Web Audio API.
+>   Nothing to source, license or download, and no URL anywhere. The ten moods were
+>   measured offline and rebalanced - the storm first came out three times louder than the
+>   rest - and a limiter keeps thunder on top of it from clipping.
+> - **No paid TTS.** The browser's own `speechSynthesis` is the whole feature: per player,
+>   off by default, live narration only. The paid upgrade was not built.
+> - Found on the way: a model can call a tool it is no longer offered. An opening scene
+>   that said "no tavern" set a tavern mood with the rule off. Both new tools now refuse when
+>   their rule is off, and are tested to. And the map first drew blank on reload:
+>   `requestAnimationFrame` does not run while a window is not painting, which the dashboard
+>   had already learned the hard way. It draws on a timer now.
+> - 14 bugs planted one at a time; each was caught - after one test was found to pass for
+>   the wrong reason (a move refused for having no map, not for the rule being off) and
+>   rewritten.
 
 Largest surface, least certain payoff, and the only phase that pulls against the project's
 thesis — a tactical grid with fog of war makes this a tactics app, where today it is a

@@ -106,6 +106,7 @@ async def _turn(adapters, cid, actor, action, images):
     house = await repo.campaign_house(cid)
     combat = await repo.get_combat(cid)
     memory = await repo.get_memory(cid)
+    battle = await repo.get_map(cid) if house.get("battle_map") else None
 
     await broadcast(adapters, cid, {"kind": "thinking", "on": True})
     try:
@@ -114,7 +115,7 @@ async def _turn(adapters, cid, actor, action, images):
                                         await repo.campaign_backend(cid)
                                         or providers.default_id(),
                                         images, cid, repo=repo, house=house,
-                                        combat=combat, memory=memory):
+                                        combat=combat, memory=memory, battle=battle):
             kind = event.pop("kind")
             if kind == "delta":
                 await broadcast(adapters, cid, {"kind": "delta", **event})

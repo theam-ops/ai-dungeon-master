@@ -18,7 +18,7 @@ import copy
 import json
 import re
 
-from game import rules
+from game import battlemap, rules
 from game.adapters.lite import SQLiteRepository
 
 SCORES = {"STR": 10, "DEX": 16, "CON": 14, "INT": 12, "WIS": 13, "CHA": 8}
@@ -62,6 +62,15 @@ async def scenario(repo):
     await repo.set_combat(cid, None)
     saw("combat over", await repo.get_combat(cid))
 
+    saw("map", await repo.get_map(cid))
+    saw("map drawn", await repo.change_map(cid, lambda m: battlemap.apply(m, {
+        "new_width": 8, "new_height": 6, "fill": "wall",
+        "paint": [{"terrain": "room", "x1": 0, "y1": 0, "x2": 7, "y2": 5}],
+        "tokens": [{"name": "Vess", "kind": "pc", "x": 2, "y": 2},
+                   {"name": "Gull", "kind": "npc", "x": 5, "y": 3}]}, ["Vess"])[0]))
+    saw("map moved", await repo.change_map(cid, lambda m: battlemap.move(m, "Vess", 3, 2)[0]))
+    saw("map now", await repo.get_map(cid))
+    saw("map of nothing", await repo.change_map("missing", lambda m: m))
     saw("campaign", await repo.get_campaign(cid))
     saw("by code", await repo.campaign_by_code(" " + c["code"].lower() + " "))
     saw("by no code", await repo.campaign_by_code("ZZZZZZ"))
@@ -263,6 +272,23 @@ def test_one_document_name_is_one_document_however_it_is_raced(pg):
     assert len(asyncio.run(run())) == 1
 
 
+def test_map_changes_made_at_once_are_all_kept(pg):
+    """A dozen tokens placed at once, from two servers: every one lands."""
+    async def run():
+        async with pg() as a, pg() as b:
+            cid = (await a.repo.create_campaign("Race"))["id"]
+            await a.repo.change_map(cid, lambda m: battlemap.new_map(20, 20))
+
+            def place(n):
+                return lambda m: battlemap.apply(
+                    m, {"tokens": [{"name": f"Rat {n}", "kind": "npc", "x": n, "y": n}]},
+                    [])[0]
+            await all_at_once(a, cid, [x.repo.change_map(cid, place(n))
+                                       for n, x in enumerate([a, b] * 6)])
+            return await a.repo.get_map(cid)
+    assert len(asyncio.run(run())["tokens"]) == 12
+
+
 def test_appends_from_two_servers_make_one_gapless_ordered_log(pg):
     async def run():
         async with pg() as a, pg() as b:
@@ -301,3 +327,16 @@ def test_text_postgres_cannot_hold_is_cleaned_not_refused(pg):
             return (await a.repo.get_campaign(cid))["name"], await a.repo.lore_texts(cid), \
                 (await a.repo.events_since(cid))[0]["text"]
     assert asyncio.run(run()) == ("Null", [("Odddoc", "ab")], "c\x00d")
+
+
+def test_a_database_from_before_the_map_gains_the_column_on_start(pg):
+    """Phase 8 deployments made their tables without `map`. CREATE TABLE IF NOT EXISTS
+    would leave them that way; the next start must add it."""
+    async def run():
+        async with pg() as a:
+            cid = (await a.repo.create_campaign("Old"))["id"]
+            await a.db.pool.execute("ALTER TABLE campaigns DROP COLUMN map")
+        async with pg() as b:                      # the next server to start
+            await b.repo.change_map(cid, lambda m: battlemap.new_map(5, 5))
+            return await b.repo.get_map(cid)
+    assert asyncio.run(run())["w"] == 5

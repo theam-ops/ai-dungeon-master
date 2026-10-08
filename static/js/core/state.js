@@ -15,6 +15,9 @@ export const S = {
   backend: null,       // the one running this campaign
   picked: { race: null, class: null, scores: null },
   combat: null,        // the fight in progress, as the server stores it, or null
+  map: null,           // the battle map as the party sees it - never more - or null
+  ambience: null,      // the mood the DM last set, played if this player turned sound on
+  replaying: false,    // true from connecting until "ready": the story so far, not news
   notes: "",           // your own standing notes for the DM
   notesMax: 600,       // replaced by the server's real cap when a campaign is entered
   attached: [],        // images staged for the next action

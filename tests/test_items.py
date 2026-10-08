@@ -342,7 +342,7 @@ def test_turning_on_variant_encumbrance_reaches_the_dm(app_client):
     assert table.character("Bram")["load"]["status"] is None
 
     r = client.post(f"/api/campaigns/{table.id}/house", json={"variant_encumbrance": True})
-    assert r.json()["house"] == {"variant_encumbrance": True}
+    assert r.json()["house"] == {**rules.HOUSE_RULES, "variant_encumbrance": True}
     assert table.character("Bram")["load"]["status"] == "heavily encumbered"
     assert any(e["kind"] == "house" for e in table.events())
 
@@ -355,7 +355,7 @@ def test_unknown_house_rules_are_dropped(app_client):
     table = new_table(client, stub)
     r = client.post(f"/api/campaigns/{table.id}/house",
                     json={"variant_encumbrance": "yes", "infinite_gold": True})
-    assert r.json()["house"] == {"variant_encumbrance": True}
+    assert r.json()["house"] == {**rules.HOUSE_RULES, "variant_encumbrance": True}
 
 
 def test_items_and_house_rules_survive_export_and_import(app_client):
@@ -376,4 +376,4 @@ def test_items_and_house_rules_survive_export_and_import(app_client):
     ilse = asyncio.run(server.A.repo.party(cid))[0]
     assert {i["name"]: i["qty"] for i in ilse["items"]}["arrows"] == 20
     assert {i["name"]: i["qty"] for i in ilse["items"]}["rations"] == 3
-    assert asyncio.run(server.A.repo.campaign_house(cid)) == {"variant_encumbrance": True}
+    assert asyncio.run(server.A.repo.campaign_house(cid)) == {**rules.HOUSE_RULES, "variant_encumbrance": True}
