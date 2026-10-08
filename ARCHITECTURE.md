@@ -50,7 +50,7 @@ Three consequences that constrain every design decision:
 ```mermaid
 graph TB
     subgraph Browser["Browser (no build step)"]
-        UI["static/app.js"]
+        UI["static/js/<br/>ES modules, no build"]
         SSE["EventSource<br/>tracks last seq"]
     end
 
@@ -255,7 +255,7 @@ carries an opaque `player_token`. That token is what owns a character row. Conse
 
 Mechanical values are stored in **English** and translated at display: races, classes,
 ability names, skill names. Prose written by people — character names, items the DM
-invents, the story — is stored as typed. `game/i18n.py` holds the rule; `static/i18n.js`
+invents, the story — is stored as typed. `game/i18n.py` holds the rule; `static/js/i18n/`
 holds the browser half.
 
 > One consequence bites anyone touching inventory: starting gear is **localised at
@@ -284,8 +284,10 @@ holds the browser half.
 | `game/rulebook.py` | 156 | the SRD: sections by heading, ranked keyword search | `data/srd/*.md` |
 | `tools/fetch_srd.py` | 151 | downloads the SRD 5.1 PDF and converts it to `data/srd/` | — |
 | `game/i18n.py` | 179 | server strings: gear, narration instruction, CLI | — |
-| `static/app.js` | 1975 | the entire UI | — |
-| `static/i18n.js` | 511 | browser strings, en + th | — |
+| `static/js/main.js` | 45 | entry: loads every module in order, then boots | — |
+| `static/js/core/` | 80 | `dom.js`, `state.js`, `api.js` — leaves; import nothing | — |
+| `static/js/i18n/` | 592 | `en.js`, `th.js` (one string table each), `index.js` (lookup) | — |
+| `static/js/*.js` | 2,220 | one module per part of the page: stream, composer, dash, drawer, … | `api.js` |
 | `dnd.py` / `play.py` | 322 / 272 | terminal client / tool CLI | none — no campaign |
 
 **Dependency direction is strictly inward.** `rules.py` depends on nothing but `i18n`.
@@ -537,7 +539,7 @@ The most useful section for a contributor or an agent. These are decisions, not 
 | A **class or race** | `rules.CLASSES` / `RACES`, `CLASS_SKILLS`, `i18n.NAMES` | hit die, primary stat, gear, 3 skills |
 | An **AI provider** | subclass `providers.Backend`, add to `_build()` | needs `available()` and a `stream()` yielding text deltas then one message in Anthropic block format |
 | A **DM tool** | `dm.TOOLS` (or a conditional like `LORE_TOOL`), then `dm.run_tool` | execution must be in Python; emit an event so the table sees it happen |
-| A **language** | `i18n.LANGUAGES`, `NARRATION_INSTRUCTION`, `GEAR`, `NAMES`, `CLI`; a `STRINGS` block in `static/i18n.js`; a `:root[data-lang="xx"]` font block in `style.css` | nothing else knows about languages |
+| A **language** | `i18n.LANGUAGES`, `NARRATION_INSTRUCTION`, `GEAR`, `NAMES`, `CLI`; a `static/js/i18n/xx.js` registered in `STRINGS` in `static/js/i18n/index.js`; a `:root[data-lang="xx"]` font block in `style.css` | nothing else knows about languages |
 | A **character field** | `rules.new_character` + a lazy default on the read path | follow `ensure_skills`; no migration needed, rides in `data` |
 | The **DM's personality** | `dm.SYSTEM` | this one string is the whole voice, pacing, and house rules |
 

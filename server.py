@@ -100,9 +100,10 @@ app.add_middleware(SessionMiddleware, secret_key=_session_secret(),
                    session_cookie="dnd_session", max_age=60 * 60 * 24 * 365,
                    same_site="lax", https_only=False)
 
-# The interface has no build step and no hashed file names, so /app.js always means the
-# newest /app.js. Without an explicit header a browser is free to guess how long it may
-# keep the old one, which shows up as an interface that quietly stays a version behind.
+# The interface has no build step and no hashed file names, so /js/main.js always means
+# the newest /js/main.js. Without an explicit header a browser is free to guess how long it
+# may keep the old one - and with two dozen ES modules, one stale module beside fresh ones
+# is not a version behind but a page that fails to start.
 # "no-cache" doesn't mean don't store it - it means ask first, and the ETag turns that
 # into a 304 with no body.
 SHELL_FILES = (".html", ".js", ".css", ".json", ".ico")

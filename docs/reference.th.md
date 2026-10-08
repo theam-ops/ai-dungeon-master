@@ -625,8 +625,8 @@ game/i18n.py     ข้อความฝั่งเซิร์ฟเวอร
 game/media.py    ตรวจรูป ลบ EXIF ป้องกัน URL อันตราย และที่เก็บไฟล์
 game/providers.py  แบ็กเอนด์ AI การแปลงรูปแบบ และการสลับเมื่อพัง
 server.py        FastAPI: การยืนยันตัวตน แคมเปญ สตรีม SSE การกระทำ
-static/i18n.js   ข้อความหน้าจอฝั่งเบราว์เซอร์
-static/          ส่วนที่เหลือของหน้าจอ — ไม่มีขั้นตอน build
+static/js/       ฝั่งเบราว์เซอร์ เป็น ES modules — ไม่มีขั้นตอน build ไม่ใช้เฟรมเวิร์ก
+static/js/i18n/  ข้อความหน้าจอ ภาษาละหนึ่งไฟล์
 dnd.py           ตัวเล่นผ่านเทอร์มินัล ใช้ DM เดียวกัน
 tests/           pytest ขับด้วย DM จำลอง — ไม่ต้องมี API key ไม่เรียกโมเดล
 ```
@@ -657,7 +657,7 @@ python -m pytest
 - **`CLASSES` / `RACES` ใน `game/rules.py`** — เพิ่มของคุณเองได้ พร้อมลูกเต๋าพลังชีวิต
   และของติดตัว
 - **การเพิ่มภาษา** — สามที่: `LANGUAGES`, `NARRATION_INSTRUCTION`, `GEAR`, `NAMES` และ
-  `CLI` ใน `game/i18n.py`; บล็อกหนึ่งใน `STRINGS` ของ `static/i18n.js`; และบล็อกฟอนต์กับ
+  `CLI` ใน `game/i18n.py`; ไฟล์หนึ่งใน `static/js/i18n/` ที่เพิ่มเข้าไปใน `STRINGS` ของ `index.js`; และบล็อกฟอนต์กับ
   ระยะบรรทัด `:root[data-lang="xx"]` ใน `static/style.css` ถ้าอักษรนั้นต้องการ ไม่มีส่วน
   อื่นของระบบที่รู้จักเรื่องภาษาเลย
 - **`output_config={"effort": ...}` ใน `game/providers.py`** — `"low"` ให้เทิร์นของ Claude

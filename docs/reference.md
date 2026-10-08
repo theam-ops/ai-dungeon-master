@@ -687,8 +687,8 @@ game/i18n.py     server-side strings: gear, DM language instruction, CLI
 game/media.py    image validation, EXIF stripping, URL guards, the file store
 game/providers.py  the AI backends, format translation, and failover
 server.py        FastAPI: auth, campaigns, SSE stream, actions
-static/i18n.js   interface strings for the browser
-static/          the rest of the UI — no build step
+static/js/       the browser side, as ES modules — no build step, no framework
+static/js/i18n/  interface strings, one file per language
 dnd.py           terminal client, same DM
 tests/           pytest, driven by a stub DM — no API key, no model call
 ```
@@ -714,7 +714,7 @@ a pre-written English sentence, so each browser renders them in its own language
   horror, or comedy, or much harsher DCs? This string is the whole personality.
 - **`CLASSES` / `RACES` in `game/rules.py`** — add your own, with hit dice and gear.
 - **Adding a language** — three places: `LANGUAGES`, `NARRATION_INSTRUCTION`, `GEAR`,
-  `NAMES` and `CLI` in `game/i18n.py`; a block in `STRINGS` in `static/i18n.js`; and a
+  `NAMES` and `CLI` in `game/i18n.py`; a file in `static/js/i18n/`, added to `STRINGS` in its `index.js`; and a
   `:root[data-lang="xx"]` font/leading block in `static/style.css` if the script needs
   one. Nothing else knows about languages.
 - **`output_config={"effort": ...}` in `game/providers.py`** — `"low"` for faster,

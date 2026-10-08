@@ -2,7 +2,7 @@
 
 Only two things need translating on this side: the starting gear written onto a new
 character sheet, and the instruction that tells the DM which language to narrate in.
-Everything else the player reads is either translated in the browser (static/i18n.js)
+Everything else the player reads is either translated in the browser (static/js/i18n/)
 or written by the DM itself.
 
 Mechanical keys - race, class, ability names - stay English in the database and are
@@ -94,7 +94,7 @@ def name(key, lang):
     return NAMES.get(lang, {}).get(key, key)
 
 
-# Terminal client strings (dnd.py). The web UI has its own set in static/i18n.js.
+# Terminal client strings (dnd.py). The web UI has its own set in static/js/i18n/.
 CLI = {
     "en": {
         "tagline": "real dice, persistent world",

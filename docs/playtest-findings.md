@@ -46,7 +46,7 @@ What follows is ranked by how much it would spoil an actual evening of play.
 
 `store.events_since(cid, since, limit=500)` returned the *oldest* 500 events after
 `since`. The browser sets `S.lastSeq` from whatever it receives
-(`static/app.js`, `handle()`), and `enterCampaign` starts from `since=0`. So opening a
+(`handle()`, now in `static/js/stream.js`), and `enterCampaign` starts from `since=0`. So opening a
 campaign that had run for a few sessions replayed the first 500 events, left `lastSeq` at
 seq 500 — and nothing ever asked for 501 onwards. The player sat looking at session one's
 opening scene while the table talked past them, and **no reconnect healed it**, because
@@ -305,7 +305,7 @@ way to know it happened: it receives seq 1..1000 then seq 1005, sets `lastSeq = 
 
 The cheap fix is client-side: `handle()` already tracks `lastSeq`, so noticing
 `ev.seq > lastSeq + 1` and re-fetching `/api/campaigns/{id}/events?since={lastSeq}` would
-heal it. Left alone because it touches the delta/narration rendering path in `app.js` and
+heal it. Left alone because it touches the delta/narration rendering path in `static/js/stream.js` and
 wants a browser to test in, which this pass did not have.
 
 ### E. Two module-level defaultdicts never shrink — FIXED
@@ -344,7 +344,7 @@ Test: `test_known_more_than_four_attached_images_vanish_silently`.
 The DM narrates in Thai, the interface is in Thai, and then the feed says "Every AI turned the
 turn away" or "The DM got stuck in a loop and the turn was cut short." Those strings are built
 in `game/dm.py` and `server.py` with no language argument. `game/i18n.py`'s `CLI` dict is the
-obvious home for them, and `static/i18n.js` would need matching entries — three places, per the
+obvious home for them, and `static/js/i18n/` would need matching entries — three places, per the
 README's own "Adding a language" note. Left alone as it overlaps `game/dm.py`.
 
 ### I. `media.fetch` re-resolves DNS after checking it

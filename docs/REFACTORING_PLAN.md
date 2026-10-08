@@ -35,7 +35,7 @@ Sorted by value per unit of work, not by the order the pillars were listed.
 | 4 | Combat, initiative, turn queue | ~1 week | **Done.** |
 | 5 | Summarisation worker | ~4 days | **Done.** 88% fewer input tokens over 200 turns. |
 | 6 | SRD retrieval | ~3 days | **Done.** SRD 5.1, 2,117 sections. |
-| 7 | Frontend ES modules | ~1 week | Pure refactor, no behaviour change. Do before 9. |
+| 7 | Frontend ES modules | ~1 week | **Done.** 25 modules; the page renders byte-identically. |
 | 8 | Postgres + Redis adapters | ~1.5 weeks | **Only if you actually need >1 process.** |
 | 9 | Battle map, fog of war, audio, TTS | ~3 weeks+ | Roughly doubles the frontend. |
 
@@ -895,6 +895,31 @@ English, so the keyword path must remain for Thai tables regardless.
 ---
 
 ## Phase 7 — frontend modularisation
+
+> **Done.** `static/app.js` and `static/i18n.js` are 25 ES modules under `static/js/`. Still
+> no framework, no build step, no Node needed to play. How it was kept honest:
+>
+> - **Every line of logic moved verbatim.** A script cut the old file at its own section
+>   headings, added `export` to top-level declarations, and generated each module's
+>   imports from what it actually uses. Code was not rewritten, so it could not be
+>   rewritten wrongly.
+> - **Two variables were assigned from outside their own section** - `view` and `pinned`.
+>   Imports are read-only, so each got a one-line setter. Two load-time calls (`showDash`,
+>   `boot`) moved to `main.js`, so nothing runs before every module has been evaluated.
+> - **A DOM equivalence check.** Before the split, a scripted session on a scratch server
+>   (its own database, the test suite's stub DM) entered a campaign, fed the event handler
+>   one of every event kind, opened every drawer tab, switched to Thai and back, and hashed
+>   the HTML of seven views. Three runs matched each other; after the split, all seven
+>   matched again, byte for byte. Clicking through - lobby, a real turn through the stub
+>   DM, the drawer, the guide, the language switch, leaving - worked on both.
+> - **`tests/test_frontend_modules.py`** keeps it that way: every module parses, every import
+>   resolves to an export, nothing from another module is used without importing it, no
+>   import is assigned to, no accidental globals (modules are strict). Each check was shown
+>   to catch a planted bug. `window.__dm` exposes a handful of entry points for the console.
+> - **Recorded, not resolved:** in ten Escape-closes-the-drawer trials on the module version,
+>   the first failed and nine passed, including five with a DM turn in flight; the original
+>   passed the same sequence. The handler moved verbatim and nothing found explains it, so it
+>   is written down here rather than declared impossible.
 
 `static/app.js` is 1952 lines. Split it. **Do not add a framework** — see
 [the recommendations](#three-recommendations-against-the-brief).
